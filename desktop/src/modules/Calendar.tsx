@@ -73,6 +73,7 @@ function tomorrowAt(hour: number): string {
 export default function Calendar() {
   const [todos, setTodos] = useState<Todo[]>([]);
   const [holidays, setHolidays] = useState<Record<string, string>>({});
+  const [holidayStatus, setHolidayStatus] = useState<'loading' | 'ready' | 'error'>('loading');
   const [cursor, setCursor] = useState(() => {
     const now = new Date();
     return { year: now.getFullYear(), month: now.getMonth() };
@@ -97,21 +98,33 @@ export default function Calendar() {
   /** 获取节假日 */
   useEffect(() => {
     const year = cursor.year;
-    (async () => {
-      try {
-        const res = await fetch(`https://api.jiejiariapi.com/v1/holidays/${year}`);
-        const data = await res.json();
-        if (data) {
-          const map: Record<string, string> = {};
-          for (const [date, info] of Object.entries(data)) {
-            const h = info as { name?: string; isOffDay?: boolean };
-            if (h.isOffDay && h.name) map[date] = h.name;
-          }
-          setHolidays(map);
-        }
-      } catch { /* 静默降级 */ }
-    })();
+    setHolidayStatus('loading');
+    window.workbench.calendar
+      .getHolidays(year)
+      .then((data) => {
+        const next = Object.fromEntries(
+          Object.entries(data)
+            .filter(([, holiday]) => holiday.isOffDay)
+            .map(([date, holiday]) => [date, holiday.name])
+        );
+        setHolidays(next);
+        setHolidayStatus('ready');
+      })
+      .catch(() => {
+        setHolidays({});
+        setHolidayStatus('error');
+      });
   }, [cursor.year]);
+
+  const monthPrefix = `${cursor.year}-${String(cursor.month + 1).padStart(2, '0')}-`;
+  const monthHolidayCount = Object.keys(holidays).filter((date) => date.startsWith(monthPrefix)).length;
+  const holidayHint = holidayStatus === 'loading'
+    ? '节假日加载中'
+    : holidayStatus === 'error'
+      ? '节假日数据暂不可用'
+      : monthHolidayCount > 0
+        ? `本月 ${monthHolidayCount} 天节假日`
+        : '本月无法定节假日';
 
   /** 选中日期 → 自动填充日期输入框 */
   const selectDate = useCallback((key: string) => {
@@ -125,9 +138,25 @@ export default function Calendar() {
     }
   }, [editingId]);
 
+  useEffect(() => {
+    const current = new Date(`${selected}T00:00`);
+    if (current.getFullYear() === cursor.year && current.getMonth() === cursor.month) return;
+    const day = Math.min(
+      current.getDate(),
+      new Date(cursor.year, cursor.month + 1, 0).getDate()
+    );
+    selectDate(dateKey(new Date(cursor.year, cursor.month, day)));
+  }, [cursor, selected, selectDate]);
+
   function shiftMonth(delta: number) {
     const next = new Date(cursor.year, cursor.month + delta, 1);
     setCursor({ year: next.getFullYear(), month: next.getMonth() });
+    const selectedDate = new Date(`${selected}T00:00`);
+    const day = Math.min(
+      selectedDate.getDate(),
+      new Date(next.getFullYear(), next.getMonth() + 1, 0).getDate()
+    );
+    selectDate(dateKey(new Date(next.getFullYear(), next.getMonth(), day)));
   }
 
   function goToday() {
@@ -252,7 +281,7 @@ export default function Calendar() {
       <div className="page-head">
         <div>
           <h2 className="page-title">日历</h2>
-          <p className="page-sub">待办日程总览</p>
+          <p className="page-sub">待办日程总览 · {holidayHint}</p>
         </div>
         <div className="calendar-head">
           <button type="button" className="icon-btn" aria-label="上一月" onClick={() => shiftMonth(-1)}>
@@ -280,6 +309,14 @@ export default function Calendar() {
               });
               const hasOverdue = dayTodos.some((t) => isOverdue(t));
               const count = dayTodos.length;
+              const activeTodos = dayTodos.filter((todo) => !todo.done);
+              const marker = hasOverdue
+                ? 'overdue'
+                : activeTodos.some((todo) => todo.start)
+                  ? 'event'
+                  : activeTodos.length > 0
+                    ? 'todo'
+                    : 'done';
               return (
                 <button
                   key={cell.key}
@@ -291,11 +328,9 @@ export default function Calendar() {
                   <span className="cell-day">{cell.day}</span>
                   {holidays[cell.key] && cell.inMonth && <span className="cell-holiday">{holidays[cell.key]}</span>}
                   {count > 0 && (
-                    <span className="cell-dots">
-                      {dayTodos.filter((t) => t.start && !t.done).length > 0 && <span className="cell-dot event" />}
-                      {dayTodos.filter((t) => !t.start && !t.done).length > 0 && <span className="cell-dot todo" />}
-                      {dayTodos.some((t) => isOverdue(t)) && <span className="cell-dot overdue" />}
-                      {count > 3 && <span className="cell-dot-count">+{count - 3}</span>}
+                    <span className="cell-summary" title={`${count} 个待办`}>
+                      <span className={`cell-dot ${marker}`} />
+                      <span className="cell-dot-count">{count}</span>
                     </span>
                   )}
                 </button>
@@ -325,24 +360,26 @@ export default function Calendar() {
                 <button type="button" className="chip" onClick={() => setFormStart(todayAt(22))}>今晚 22:00</button>
                 <button type="button" className="chip" onClick={() => setFormStart(tomorrowAt(9))}>明天 09:00</button>
               </div>
-              <label className="field">
-                <span>优先级</span>
-                <select value={formPriority} onChange={(e) => setFormPriority(e.target.value as Priority)}>
-                  <option value="high">高优先级</option>
-                  <option value="medium">中优先级</option>
-                  <option value="low">低优先级</option>
-                </select>
-              </label>
-              <label className="field">
-                <span>重复</span>
-                <select value={formRepeat} onChange={(e) => setFormRepeat(e.target.value as Todo['repeat'])}>
-                  <option value="none">不重复</option>
-                  <option value="daily">每天</option>
-                  <option value="weekly">每周</option>
-                  <option value="monthly">每月</option>
-                  <option value="yearly">每年</option>
-                </select>
-              </label>
+              <div className="side-form-row">
+                <label className="field">
+                  <span>优先级</span>
+                  <select value={formPriority} onChange={(e) => setFormPriority(e.target.value as Priority)}>
+                    <option value="high">高优先级</option>
+                    <option value="medium">中优先级</option>
+                    <option value="low">低优先级</option>
+                  </select>
+                </label>
+                <label className="field">
+                  <span>重复</span>
+                  <select value={formRepeat} onChange={(e) => setFormRepeat(e.target.value as Todo['repeat'])}>
+                    <option value="none">不重复</option>
+                    <option value="daily">每天</option>
+                    <option value="weekly">每周</option>
+                    <option value="monthly">每月</option>
+                    <option value="yearly">每年</option>
+                  </select>
+                </label>
+              </div>
               <div className="form-actions">
                 <button type="submit" className="btn-primary btn-small">
                   <Plus size={15} /> {editingId ? '保存修改' : '添加'}

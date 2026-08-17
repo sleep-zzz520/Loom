@@ -23,6 +23,9 @@ contextBridge.exposeInMainWorld('workbench', {
       remove: (id) => ipcRenderer.invoke('workspace:remove-note', id),
     },
   },
+  calendar: {
+    getHolidays: (year) => ipcRenderer.invoke('calendar:get-holidays', year),
+  },
   agent: {
     chat: (messages) => ipcRenderer.invoke('agent:chat', messages),
   },

@@ -116,6 +116,9 @@ export interface WorkbenchApi {
       remove: (id: string) => Promise<Note[]>;
     };
   };
+  calendar: {
+    getHolidays: (year: number) => Promise<Record<string, { name: string; isOffDay: boolean }>>;
+  };
   agent: {
     chat: (messages: ChatMessage[]) => Promise<string>;
   };

@@ -1,5 +1,5 @@
 import { FormEvent, useEffect, useState } from 'react';
-import { Check, Phone, Plus, RefreshCw, Repeat, Trash2 } from 'lucide-react';
+import { Check, Phone, Plus, RefreshCw, Repeat, RotateCcw, Trash2 } from 'lucide-react';
 import type { Priority, Todo } from '../types';
 
 const PRIORITY_LABEL: Record<Priority, string> = {
@@ -54,12 +54,22 @@ function absoluteTime(due: string): string {
   return new Date(due).toLocaleString('zh-CN', { hour12: false });
 }
 
+function toDatetimeLocal(value: string | null): string {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  return new Date(date.getTime() - date.getTimezoneOffset() * 60_000)
+    .toISOString()
+    .slice(0, 16);
+}
+
 export default function Todos() {
   const [todos, setTodos] = useState<Todo[]>([]);
   const [title, setTitle] = useState('');
   const [priority, setPriority] = useState<Priority>('medium');
   const [due, setDue] = useState('');
   const [repeat, setRepeat] = useState<Todo['repeat']>('none');
+  const [editingId, setEditingId] = useState<string | null>(null);
   const [notifyMsg, setNotifyMsg] = useState('');
 
   useEffect(() => {
@@ -69,19 +79,36 @@ export default function Todos() {
       .catch(() => setTodos([]));
   }, []);
 
-  async function addTodo(event: FormEvent) {
+  function resetForm() {
+    setTitle('');
+    setPriority('medium');
+    setDue('');
+    setRepeat('none');
+    setEditingId(null);
+  }
+
+  async function saveTodo(event: FormEvent) {
     event.preventDefault();
     if (!title.trim()) return;
-    const next = await window.workbench.workspace.todos.create({
+    const input = {
       title: title.trim(),
       priority,
       due: due || null,
       repeat,
-    });
+    };
+    const next = editingId
+      ? await window.workbench.workspace.todos.update(editingId, input)
+      : await window.workbench.workspace.todos.create(input);
     setTodos(next);
-    setTitle('');
-    setDue('');
-    setRepeat('none');
+    resetForm();
+  }
+
+  function startEdit(todo: Todo) {
+    setEditingId(todo.id);
+    setTitle(todo.title);
+    setPriority(todo.priority);
+    setDue(toDatetimeLocal(todo.due));
+    setRepeat(todo.repeat);
   }
 
   async function toggleDone(todo: Todo) {
@@ -92,6 +119,7 @@ export default function Todos() {
   async function removeTodo(id: string) {
     const next = await window.workbench.workspace.todos.remove(id);
     setTodos(next);
+    if (editingId === id) resetForm();
   }
 
   async function checkNotifications() {
@@ -137,7 +165,7 @@ export default function Todos() {
         </p>
       </div>
 
-      <form className="todo-add" onSubmit={addTodo}>
+      <form className="todo-add" onSubmit={saveTodo}>
         <label className="field">
           <span>任务</span>
           <input
@@ -169,8 +197,12 @@ export default function Todos() {
           </select>
         </label>
         <button type="submit" className="btn-primary">
-          <Plus size={16} />
-          添加
+          {editingId ? <Check size={16} /> : <Plus size={16} />}
+          {editingId ? '保存' : '添加'}
+        </button>
+        <button type="button" className="text-btn" onClick={resetForm}>
+          <RotateCcw size={15} />
+          重置
         </button>
       </form>
 
@@ -182,48 +214,67 @@ export default function Todos() {
             <div
               key={todo.id}
               className={`todo-item${todo.done ? ' done' : ''}${overdue ? ' overdue' : ''}`}
+              role="button"
+              tabIndex={0}
+              onClick={() => startEdit(todo)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' || event.key === ' ') {
+                  event.preventDefault();
+                  startEdit(todo);
+                }
+              }}
             >
               <button
                 type="button"
                 aria-label="完成状态"
                 className={`todo-check${todo.done ? ' checked' : ''}`}
-                onClick={() => toggleDone(todo)}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  toggleDone(todo);
+                }}
               >
                 {todo.done && <Check size={14} strokeWidth={3} />}
               </button>
               <span className="todo-title">{todo.title}</span>
-              <span className={`priority priority-${todo.priority}`}>
-                {PRIORITY_LABEL[todo.priority]}
-              </span>
-              {todo.repeat && todo.repeat !== 'none' && (
-                <span className="repeat-icon" title={REPEAT_LABEL[todo.repeat]}>
-                  <Repeat size={12} strokeWidth={1.8} />
+              <div className="todo-info">
+                <span className={`priority priority-${todo.priority}`}>
+                  {PRIORITY_LABEL[todo.priority]}
                 </span>
-              )}
-              {overdue && (
-                <span className="badge badge-overdue" title={absoluteTime(todo.due!)}>
-                  {relativeTime(todo.due!)}
-                </span>
-              )}
-              {dueSoon && !overdue && (
-                <span className="badge badge-due-soon" title={absoluteTime(todo.due!)}>
-                  {relativeTime(todo.due!)}
-                </span>
-              )}
-              {!overdue && !dueSoon && todo.due && (
-                <span className="todo-meta" title={absoluteTime(todo.due)}>
-                  {relativeTime(todo.due)}
-                </span>
-              )}
-              {!todo.due && <span className="todo-meta">无期限</span>}
-              <button
-                type="button"
-                aria-label="删除"
-                className="icon-btn"
-                onClick={() => removeTodo(todo.id)}
-              >
-                <Trash2 size={16} strokeWidth={1.8} />
-              </button>
+                {todo.repeat && todo.repeat !== 'none' && (
+                  <span className="repeat-icon" title={REPEAT_LABEL[todo.repeat]}>
+                    <Repeat size={12} strokeWidth={1.8} />
+                  </span>
+                )}
+                {overdue && (
+                  <span className="badge badge-overdue" title={absoluteTime(todo.due!)}>
+                    {relativeTime(todo.due!)}
+                  </span>
+                )}
+                {dueSoon && !overdue && (
+                  <span className="badge badge-due-soon" title={absoluteTime(todo.due!)}>
+                    {relativeTime(todo.due!)}
+                  </span>
+                )}
+                {!overdue && !dueSoon && todo.due && (
+                  <span className="todo-meta" title={absoluteTime(todo.due)}>
+                    {relativeTime(todo.due)}
+                  </span>
+                )}
+                {!todo.due && <span className="todo-meta">无期限</span>}
+              </div>
+              <div className="todo-controls">
+                <button
+                  type="button"
+                  aria-label="删除"
+                  className="icon-btn"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    removeTodo(todo.id);
+                  }}
+                >
+                  <Trash2 size={16} strokeWidth={1.8} />
+                </button>
+              </div>
             </div>
           );
         })}

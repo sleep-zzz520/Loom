@@ -1,9 +1,10 @@
-const { app, BrowserWindow, ipcMain } = require('electron');
+const { app, BrowserWindow, ipcMain, net } = require('electron');
 const path = require('node:path');
 const store = require('./store.cjs');
 const workspace = require('./workspace.cjs');
 const agent = require('./agent.cjs');
 const notifier = require('./notifier.cjs');
+const holidays = require('./holidays.cjs');
 
 const isDev = Boolean(process.env.VITE_DEV_SERVER_URL);
 
@@ -55,6 +56,9 @@ function registerIpc() {
   ipcMain.handle('workspace:list-notes', () => workspace.listNotes());
   ipcMain.handle('workspace:save-note', (_event, input) => workspace.saveNote(input));
   ipcMain.handle('workspace:remove-note', (_event, id) => workspace.removeNote(id));
+  ipcMain.handle('calendar:get-holidays', (_event, year) =>
+    holidays.getHolidays(year, (url) => net.fetch(url))
+  );
   ipcMain.handle('agent:chat', (_event, messages) =>
     agent.runAgent(messages, store.getSettings())
   );
