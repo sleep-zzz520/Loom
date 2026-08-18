@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import {
   CalendarDays,
+  ChevronDown,
   CheckSquare,
   FileLock2,
   Inbox,
@@ -14,6 +15,7 @@ import Calendar from './modules/Calendar';
 import Agent from './modules/Agent';
 import Settings from './modules/Settings';
 import Notes from './modules/Notes';
+import Profile from './modules/Profile';
 import Placeholder from './modules/Placeholder';
 
 export type ModuleKey =
@@ -23,8 +25,9 @@ export type ModuleKey =
   | 'mail'
   | 'agent'
   | 'music'
-  | 'profile'
-  | 'settings';
+  | 'profile';
+
+export type SettingsKey = 'settings-profile' | 'settings-notifications' | 'settings-config';
 
 const NAV: { key: ModuleKey; label: string; icon: typeof CheckSquare }[] = [
   { key: 'todos', label: '待办', icon: CheckSquare },
@@ -34,7 +37,6 @@ const NAV: { key: ModuleKey; label: string; icon: typeof CheckSquare }[] = [
   { key: 'agent', label: 'Agent', icon: Sparkles },
   { key: 'music', label: '音乐', icon: Music2 },
   { key: 'profile', label: '资料', icon: FileLock2 },
-  { key: 'settings', label: '设置', icon: SettingsIcon },
 ];
 
 const PLACEHOLDER: Record<ModuleKey, { title: string; hint: string }> = {
@@ -44,12 +46,12 @@ const PLACEHOLDER: Record<ModuleKey, { title: string; hint: string }> = {
   mail: { title: '邮箱', hint: 'IMAP / SMTP 邮箱收发将在后续迭代接入。' },
   agent: { title: 'Agent', hint: '绑定个人资料与待办的助手将在后续迭代接入。' },
   music: { title: '音乐', hint: '网易云音乐播放将在后续迭代接入。' },
-  profile: { title: '资料', hint: '资料分类与隐私分级将在后续迭代接入。' },
-  settings: { title: '设置', hint: '邮箱、网易云、Agent 与同步配置将在后续迭代接入。' },
+  profile: { title: '资料', hint: '导入文件与工作台文档。' },
 };
 
 export default function App() {
-  const [active, setActive] = useState<ModuleKey>('todos');
+  const [active, setActive] = useState<ModuleKey | SettingsKey>('todos');
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [appName, setAppName] = useState('个人工作台');
   const today = new Intl.DateTimeFormat('zh-CN', {
     month: 'long',
@@ -83,6 +85,36 @@ export default function App() {
               <span>{label}</span>
             </button>
           ))}
+          <div className={`nav-group${active.startsWith('settings-') ? ' has-active' : ''}`}>
+            <button
+              type="button"
+              className="nav-item nav-parent"
+              aria-expanded={settingsOpen}
+              onClick={() => setSettingsOpen((open) => !open)}
+            >
+              <SettingsIcon size={17} />
+              <span>设置</span>
+              <ChevronDown className="nav-caret" size={15} />
+            </button>
+            {settingsOpen && (
+              <div className="nav-submenu">
+                {[
+                  { key: 'settings-profile', label: '个人资料' },
+                  { key: 'settings-notifications', label: '通知' },
+                  { key: 'settings-config', label: '配置' },
+                ].map(({ key, label }) => (
+                  <button
+                    key={key}
+                    type="button"
+                    className={`nav-subitem${active === key ? ' active' : ''}`}
+                    onClick={() => setActive(key as SettingsKey)}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
         </nav>
         <div className="sidebar-foot">{today}</div>
       </aside>
@@ -93,10 +125,12 @@ export default function App() {
           <Calendar />
         ) : active === 'notes' ? (
           <Notes />
+        ) : active === 'profile' ? (
+          <Profile />
         ) : active === 'agent' ? (
-          <Agent onOpenSettings={() => setActive('settings')} />
-        ) : active === 'settings' ? (
-          <Settings />
+          <Agent onOpenSettings={() => { setSettingsOpen(true); setActive('settings-config'); }} />
+        ) : active === 'settings-profile' || active === 'settings-notifications' || active === 'settings-config' ? (
+          <Settings section={active} />
         ) : (
           <Placeholder title={PLACEHOLDER[active].title} hint={PLACEHOLDER[active].hint} />
         )}

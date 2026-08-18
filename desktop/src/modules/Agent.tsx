@@ -55,29 +55,16 @@ export default function Agent({ onOpenSettings }: { onOpenSettings: () => void }
 
   return (
     <section className="module-page agent-page">
-      <div className="page-head">
-        <div>
-          <h2 className="page-title">Agent</h2>
-          <p className="page-sub">可以读取并修改你的待办、日历和备忘录</p>
-        </div>
-        <div className="agent-status">
-          <span className={configured ? 'status-dot on' : 'status-dot'} />
-          {configured ? '已连接' : '未配置'}
-        </div>
-      </div>
-
       <div className="agent-panel">
         <div className="agent-toolbar">
           <span className="agent-label">
             <Sparkles size={14} />
             工作台上下文已加载
           </span>
-          {!configured && (
-            <button type="button" className="text-btn" onClick={onOpenSettings}>
-              <Settings2 size={15} />
-              配置
-            </button>
-          )}
+          <div className="agent-toolbar-actions">
+            <span className="agent-status"><span className={configured ? 'status-dot on' : 'status-dot'} />{configured ? '已连接' : '未配置'}</span>
+            {!configured && <button type="button" className="text-btn" onClick={onOpenSettings}><Settings2 size={15} /> 配置</button>}
+          </div>
         </div>
 
         <div className="chat-list" ref={scrollRef}>

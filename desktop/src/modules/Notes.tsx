@@ -146,18 +146,14 @@ export default function Notes() {
 
   return (
     <section className="module-page notes-page">
-      <div className="page-head">
-        <div>
-          <h2 className="page-title">备忘录</h2>
-          <p className="page-sub">本地保存，停止输入后自动保存</p>
-        </div>
-        <button type="button" className="btn-primary" onClick={createNote}>
-          <FilePlus2 size={16} /> 新建笔记
-        </button>
-      </div>
-
       <div className="notes-layout">
         <aside className="notes-list-panel">
+          <div className="notes-list-toolbar">
+            <span>笔记</span>
+            <button type="button" className="text-btn" onClick={createNote}>
+              <FilePlus2 size={14} /> 新建
+            </button>
+          </div>
           <label className="notes-search">
             <Search size={15} />
             <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索笔记" />

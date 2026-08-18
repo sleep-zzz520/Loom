@@ -1,10 +1,11 @@
-const { app, BrowserWindow, ipcMain, net } = require('electron');
+const { app, BrowserWindow, dialog, ipcMain, net } = require('electron');
 const path = require('node:path');
 const store = require('./store.cjs');
 const workspace = require('./workspace.cjs');
 const agent = require('./agent.cjs');
 const notifier = require('./notifier.cjs');
 const holidays = require('./holidays.cjs');
+const library = require('./library.cjs');
 
 const isDev = Boolean(process.env.VITE_DEV_SERVER_URL);
 
@@ -47,6 +48,17 @@ function registerIpc() {
   ipcMain.handle('data:set-settings', (_event, patch) => store.setSettings(patch));
   ipcMain.handle('data:get-module', (_event, name) => store.getModule(name));
   ipcMain.handle('data:set-module', (_event, name, items) => store.setModule(name, items));
+  ipcMain.handle('library:import-file', async () => {
+    const result = await dialog.showOpenDialog({
+      title: '导入资料文件',
+      properties: ['openFile'],
+    });
+    return result.canceled ? null : library.importFile(result.filePaths[0]);
+  });
+  ipcMain.handle('library:create-document', () => library.createDocument());
+  ipcMain.handle('library:update-item', (_event, id, patch) => library.updateItem(id, patch));
+  ipcMain.handle('library:remove-item', (_event, id) => library.removeItem(id));
+  ipcMain.handle('library:preview-file', (_event, id) => library.previewFile(id));
 
   ipcMain.handle('workspace:snapshot', () => workspace.snapshot());
   ipcMain.handle('workspace:list-todos', () => workspace.listTodos());
@@ -73,6 +85,7 @@ function registerIpc() {
 
 app.whenReady().then(() => {
   store.init(app.getPath('userData'));
+  library.init(app.getPath('userData'));
   registerIpc();
   createWindow();
 

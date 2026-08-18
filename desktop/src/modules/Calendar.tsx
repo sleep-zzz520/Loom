@@ -73,7 +73,6 @@ function tomorrowAt(hour: number): string {
 export default function Calendar() {
   const [todos, setTodos] = useState<Todo[]>([]);
   const [holidays, setHolidays] = useState<Record<string, string>>({});
-  const [holidayStatus, setHolidayStatus] = useState<'loading' | 'ready' | 'error'>('loading');
   const [cursor, setCursor] = useState(() => {
     const now = new Date();
     return { year: now.getFullYear(), month: now.getMonth() };
@@ -98,7 +97,6 @@ export default function Calendar() {
   /** 获取节假日 */
   useEffect(() => {
     const year = cursor.year;
-    setHolidayStatus('loading');
     window.workbench.calendar
       .getHolidays(year)
       .then((data) => {
@@ -108,23 +106,11 @@ export default function Calendar() {
             .map(([date, holiday]) => [date, holiday.name])
         );
         setHolidays(next);
-        setHolidayStatus('ready');
       })
       .catch(() => {
         setHolidays({});
-        setHolidayStatus('error');
       });
   }, [cursor.year]);
-
-  const monthPrefix = `${cursor.year}-${String(cursor.month + 1).padStart(2, '0')}-`;
-  const monthHolidayCount = Object.keys(holidays).filter((date) => date.startsWith(monthPrefix)).length;
-  const holidayHint = holidayStatus === 'loading'
-    ? '节假日加载中'
-    : holidayStatus === 'error'
-      ? '节假日数据暂不可用'
-      : monthHolidayCount > 0
-        ? `本月 ${monthHolidayCount} 天节假日`
-        : '本月无法定节假日';
 
   /** 选中日期 → 自动填充日期输入框 */
   const selectDate = useCallback((key: string) => {
@@ -278,26 +264,21 @@ export default function Calendar() {
 
   return (
     <section className="module-page">
-      <div className="page-head">
-        <div>
-          <h2 className="page-title">日历</h2>
-          <p className="page-sub">待办日程总览 · {holidayHint}</p>
-        </div>
-        <div className="calendar-head">
-          <button type="button" className="icon-btn" aria-label="上一月" onClick={() => shiftMonth(-1)}>
-            <ChevronLeft size={18} />
-          </button>
-          <button type="button" className="text-btn" onClick={goToday}>
-            {cursor.year} 年 {cursor.month + 1} 月
-          </button>
-          <button type="button" className="icon-btn" aria-label="下一月" onClick={() => shiftMonth(1)}>
-            <ChevronRight size={18} />
-          </button>
-        </div>
-      </div>
-
       <div className="calendar-layout">
         <div className="calendar-panel">
+          <div className="calendar-panel-toolbar">
+            <div className="calendar-head">
+              <button type="button" className="icon-btn" aria-label="上一月" onClick={() => shiftMonth(-1)}>
+                <ChevronLeft size={18} />
+              </button>
+              <button type="button" className="text-btn" onClick={goToday}>
+                {cursor.year} 年 {cursor.month + 1} 月
+              </button>
+              <button type="button" className="icon-btn" aria-label="下一月" onClick={() => shiftMonth(1)}>
+                <ChevronRight size={18} />
+              </button>
+            </div>
+          </div>
           <div className="calendar-weekdays">
             {WEEKDAYS.map((w) => <span key={w}>{w}</span>)}
           </div>

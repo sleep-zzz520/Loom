@@ -20,21 +20,24 @@ export interface Note {
   updatedAt: string;
 }
 
-export type Privacy = 'public' | 'private' | 'secret';
+export type LibrarySource = 'imported' | 'created';
 
 export interface ProfileItem {
   id: string;
   name: string;
+  source: LibrarySource;
   categoryId: string;
-  privacy: Privacy;
-  path: string;
+  storageName: string;
+  mimeType: string;
+  size: number;
+  content: string;
   createdAt: string;
+  updatedAt: string;
 }
 
 export interface Category {
   id: string;
   name: string;
-  privacy: Privacy;
 }
 
 export interface AppSettings {
@@ -93,6 +96,13 @@ export interface WorkbenchApi {
       name: K,
       items: WorkbenchData['modules'][K]
     ) => Promise<WorkbenchData['modules'][K]>;
+  };
+  library: {
+    importFile: () => Promise<{ items: ProfileItem[]; item: ProfileItem } | null>;
+    createDocument: () => Promise<{ items: ProfileItem[]; item: ProfileItem }>;
+    updateItem: (id: string, patch: Partial<Pick<ProfileItem, 'name' | 'content' | 'categoryId'>>) => Promise<{ items: ProfileItem[]; item: ProfileItem }>;
+    removeItem: (id: string) => Promise<ProfileItem[]>;
+    previewFile: (id: string) => Promise<{ available: boolean; reason?: string; mimeType?: string; data?: string }>;
   };
   workspace: {
     snapshot: () => Promise<WorkspaceSnapshot>;

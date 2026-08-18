@@ -9,6 +9,13 @@ contextBridge.exposeInMainWorld('workbench', {
     getModule: (name) => ipcRenderer.invoke('data:get-module', name),
     setModule: (name, items) => ipcRenderer.invoke('data:set-module', name, items),
   },
+  library: {
+    importFile: () => ipcRenderer.invoke('library:import-file'),
+    createDocument: () => ipcRenderer.invoke('library:create-document'),
+    updateItem: (id, patch) => ipcRenderer.invoke('library:update-item', id, patch),
+    removeItem: (id) => ipcRenderer.invoke('library:remove-item', id),
+    previewFile: (id) => ipcRenderer.invoke('library:preview-file', id),
+  },
   workspace: {
     snapshot: () => ipcRenderer.invoke('workspace:snapshot'),
     todos: {

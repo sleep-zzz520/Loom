@@ -155,16 +155,6 @@ export default function Todos() {
 
   return (
     <section className="module-page">
-      <div className="page-head">
-        <div>
-          <h2 className="page-title">待办</h2>
-          <p className="page-sub">按优先级和截止时间排序</p>
-        </div>
-        <p className="page-meta">
-          {todos.filter((todo) => !todo.done).length} 进行中 · {todos.length} 总计
-        </p>
-      </div>
-
       <form className="todo-add" onSubmit={saveTodo}>
         <label className="field">
           <span>任务</span>

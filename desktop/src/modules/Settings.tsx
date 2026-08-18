@@ -1,10 +1,37 @@
 import { FormEvent, useEffect, useState } from 'react';
 import { Save } from 'lucide-react';
+import type { SettingsKey } from '../App';
 import type { AppSettings } from '../types';
 
-export default function Settings() {
+type SettingsProps = {
+  section: SettingsKey;
+};
+
+const SECTION_INFO: Record<SettingsKey, { number: string; title: string; description: string; saveHint: string }> = {
+  'settings-profile': {
+    number: '01',
+    title: '个人资料',
+    description: '管理显示在工作台中的身份信息与使用偏好。',
+    saveHint: '保存后，新的个人资料会用于工作台内的 Agent 上下文。',
+  },
+  'settings-notifications': {
+    number: '02',
+    title: '通知',
+    description: '设置待办事项逾期时的手机提醒方式。',
+    saveHint: '保存后，新的提醒方式会用于后续的超期通知。',
+  },
+  'settings-config': {
+    number: '03',
+    title: '配置',
+    description: '连接兼容 OpenAI 的 Agent 模型服务。',
+    saveHint: '保存后，可回到 Agent 页面立即使用这组连接参数。',
+  },
+};
+
+export default function Settings({ section }: SettingsProps) {
   const [settings, setSettingsState] = useState<AppSettings | null>(null);
   const [saved, setSaved] = useState(false);
+  const sectionInfo = SECTION_INFO[section];
 
   useEffect(() => {
     window.workbench.data
@@ -54,20 +81,24 @@ export default function Settings() {
 
   return (
     <section className="module-page">
-      <div className="page-head">
-        <div>
-          <h2 className="page-title">设置</h2>
-          <p className="page-sub">个人资料与 Agent 配置</p>
-        </div>
-        <button type="submit" form="settings-form" className="btn-primary">
-          <Save size={15} />
-          保存
-        </button>
-      </div>
-
       <form id="settings-form" className="settings-grid" onSubmit={save}>
-        <div className="settings-section">
-          <h3 className="settings-title">个人资料</h3>
+        <aside className="settings-overview">
+          <p className="settings-number">{sectionInfo.number}</p>
+          <div>
+            <p className="settings-eyebrow">工作台设置</p>
+            <h2 className="settings-title">{sectionInfo.title}</h2>
+            <p className="settings-description">{sectionInfo.description}</p>
+          </div>
+          <p className="settings-overview-note">选择左侧子项，可切换到其他设置类别。</p>
+        </aside>
+
+        <section className="settings-section" aria-labelledby="settings-form-title">
+          <div className="settings-form-intro">
+            <p id="settings-form-title">编辑{sectionInfo.title}</p>
+            <span>本页设置</span>
+          </div>
+          <div className="settings-section-content">
+          {section === 'settings-profile' && <>
           <label className="field">
             <span>姓名</span>
             <input
@@ -108,12 +139,9 @@ export default function Settings() {
               placeholder="例如：工作日不要打扰我午休"
             />
           </label>
-        </div>
+          </>}
 
-        <div className="settings-section">
-          <h3 className="settings-title">通知</h3>
-          <p className="settings-hint">配置待办超期提醒的推送渠道，支持 ntfy 和 Bark（iOS 推荐）。</p>
-
+          {section === 'settings-notifications' && <>
           <label className="field">
             <span>推送渠道</span>
             <select
@@ -150,7 +178,7 @@ export default function Settings() {
                   placeholder="输入一个自定义的 topic 名称，如 my-workbench"
                 />
               </label>
-              <p className="settings-hint" style={{ marginTop: 8 }}>
+              <p className="settings-detail-note">
                 手机安装 ntfy App → 点右下角订阅 → 输入同一个 topic 名称 → 完成。
               </p>
             </>
@@ -168,16 +196,14 @@ export default function Settings() {
                   placeholder="https://api.day.app/你的设备Key"
                 />
               </label>
-              <p className="settings-hint" style={{ marginTop: 8 }}>
+              <p className="settings-detail-note">
                 App Store 搜索 Bark 安装 → 打开 App 复制推送地址 → 粘贴到上面输入框 → 保存后回到待办页点「测试手机推送」验证。
               </p>
             </>
           )}
-        </div>
+          </>}
 
-        <div className="settings-section">
-          <h3 className="settings-title">Agent 模型</h3>
-          <p className="settings-hint">使用 OpenAI 兼容的 chat/completions 接口</p>
+          {section === 'settings-config' && <>
           <label className="field">
             <span>API 地址</span>
             <input
@@ -209,10 +235,16 @@ export default function Settings() {
               placeholder="deepseek-chat"
             />
           </label>
-        </div>
+          </>}
+          </div>
+          <footer className="settings-actions">
+            <p>{sectionInfo.saveHint}</p>
+            <button type="submit" className="btn-primary settings-save">
+              <Save size={15} /> {saved ? '已保存' : '保存'}
+            </button>
+          </footer>
+        </section>
       </form>
-
-      {saved && <p className="save-note">已保存</p>}
     </section>
   );
 }

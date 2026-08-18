@@ -148,8 +148,25 @@ if (process.env.WORKBENCH_SELF_TEST === '1') {
     if (removedNotes.length !== 0) {
       throw new Error('note remove failed');
     }
+    const category = { id: 'self-test-category', name: '工作资料' };
+    store.setModule('categories', [category]);
+    store.setModule('profileItems', [{
+      id: 'self-test-profile-item',
+      name: '自检资料',
+      categoryId: category.id,
+      source: 'created',
+      storageName: '',
+      mimeType: 'text/markdown',
+      size: 0,
+      content: '',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    }]);
+    if (store.getModule('profileItems')[0].categoryId !== category.id) {
+      throw new Error('profile item save failed');
+    }
     const snap = workspace.snapshot();
-    if (snap.todos.length !== 1 || snap.notes.length !== 0) {
+    if (snap.todos.length !== 1 || snap.notes.length !== 0 || snap.categories.length !== 1) {
       throw new Error('snapshot failed');
     }
     console.log('workspace self-test ok');
