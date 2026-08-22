@@ -167,6 +167,7 @@ export interface AgentSuggestion {
   createdAt: string;
   updatedAt: string;
   notifiedAt: string | null;
+  followUpAt: string | null;
 }
 
 export interface AgentRun {
@@ -184,7 +185,8 @@ export interface AgentRun {
 export type AgentProposal =
   | { kind: 'create_todo'; title: string; priority: Priority; due: string | null }
   | { kind: 'create_note'; title: string; content: string }
-  | { kind: 'save_important_date'; title: string; date: string };
+  | { kind: 'save_important_date'; title: string; date: string }
+  | { kind: 'save_preference'; preference: string };
 
 export interface AgentReply {
   content: string;
@@ -244,7 +246,7 @@ export interface WorkbenchApi {
     chat: (messages: ChatMessage[], onDelta?: (delta: string) => void) => Promise<AgentReply>;
     confirmProposal: (proposal: AgentProposal) => Promise<{ content: string }>;
     getSuggestions: () => Promise<AgentSuggestion[]>;
-    updateSuggestion: (id: string, patch: { status: AgentSuggestionStatus }) => Promise<AgentSuggestion[]>;
+    updateSuggestion: (id: string, patch: { status: AgentSuggestionStatus; followUpAt?: string | null }) => Promise<AgentSuggestion[]>;
     checkProactive: (force?: boolean) => Promise<AgentSuggestion[]>;
     onProactiveUpdated: (callback: () => void) => () => void;
     onOpenAgent: (callback: () => void) => () => void;

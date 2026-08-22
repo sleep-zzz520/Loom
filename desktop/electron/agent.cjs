@@ -97,6 +97,18 @@ const TOOL_DEFINITIONS = [
       },
     },
   },
+  {
+    type: 'function',
+    function: {
+      name: 'prepare_save_preference',
+      description: '当用户明确要求记住一条长期有效的工作习惯、沟通偏好或稳定规则时，准备保存到 Agent 的长期规则；必须由用户在界面确认后才会真正保存。不要把一次性任务或临时要求保存为长期偏好。',
+      parameters: {
+        type: 'object',
+        properties: { preference: { type: 'string', description: '一条清晰、长期有效的工作方式或沟通偏好' } },
+        required: ['preference'],
+      },
+    },
+  },
 ];
 
 const READ_TOOL_DEFINITIONS = TOOL_DEFINITIONS.filter((tool) => tool.function.name.startsWith('get_'));
@@ -137,11 +149,13 @@ function buildSystemPrompt(settings) {
     : '涉及新增、修改或删除数据时，必须先生成确认卡片，等待用户确认。';
   return [
     `你是个人工作台的中文助手。${responseLengthInstruction}`,
+    '普通回答使用简洁的 Markdown 结构：先给结论；需要分组时使用短小的粗体小标题或列表；每个列表项只表达一个动作，避免连续堆叠长段落。',
     confirmationInstruction,
     '工作台中的真实数据必须通过工具读取；不要编造待办、日程、备忘录或资料内容。',
     '当用户询问今天安排、日程或待办时，先调用 get_now，再调用 get_schedule 或 get_todos。',
     '当用户要求新增待办或备忘录时，只能调用 prepare_create_todo 或 prepare_create_note。它们只会生成确认卡片，绝不能声称已经保存。',
     '公共节假日与常见日期由系统自动识别。只有用户明确提到自己的生日、纪念日等私人日期时，才调用 prepare_save_important_date；它只会生成确认卡片，绝不能声称已经保存。',
+    '只有用户明确说“记住”“以后都按这个”“把这条作为长期规则”等，要求保存长期工作习惯或沟通偏好时，才调用 prepare_save_preference；一次性任务、当前对话要求和 Agent 自己推测出的偏好不要保存。它只会生成确认卡片，绝不能声称已经记住。',
     '不要要求用户提供工作台中已有的信息；需要时调用相应工具。',
     `用户资料：${JSON.stringify({
       name: profile.name || '',
@@ -241,6 +255,14 @@ function buildProposal(name, args) {
       content: `已准备好保存“${title}”（每年 ${date}），确认后才会加入你的个人日期。`,
     };
   }
+  if (name === 'prepare_save_preference') {
+    const preference = safeText(args.preference, 400).replace(/\s+/g, ' ').trim();
+    if (!preference) return { error: '长期偏好不能为空' };
+    return {
+      proposal: { kind: 'save_preference', preference },
+      content: `已准备好记住这条工作方式：“${preference}”，确认后才会加入 Agent 的长期规则。`,
+    };
+  }
   return null;
 }
 
@@ -250,6 +272,7 @@ function normaliseProposal(value) {
     create_todo: 'prepare_create_todo',
     create_note: 'prepare_create_note',
     save_important_date: 'prepare_save_important_date',
+    save_preference: 'prepare_save_preference',
   };
   const prepared = buildProposal(nameByKind[value.kind], value);
   return prepared?.proposal || null;
@@ -472,6 +495,19 @@ function confirmProposal(proposal) {
     });
     return { content: `已记住：每年 ${safeProposal.date} 是“${safeProposal.title}”。` };
   }
+  if (safeProposal.kind === 'save_preference') {
+    const settings = store.getSettings();
+    const preferences = Array.isArray(settings.profile?.preferences)
+      ? settings.profile.preferences.filter((item) => typeof item === 'string')
+      : [];
+    if (preferences.some((item) => item.trim() === safeProposal.preference)) {
+      return { content: `这条长期规则已经记住了：“${safeProposal.preference}”。` };
+    }
+    store.setSettings({
+      profile: { preferences: [...preferences, safeProposal.preference] },
+    });
+    return { content: `已记住这条长期规则：“${safeProposal.preference}”。` };
+  }
   throw new Error('暂不支持该确认操作');
 }
 
@@ -488,7 +524,8 @@ if (process.env.WORKBENCH_AGENT_SELF_TEST === '1') {
   const todo = buildProposal('prepare_create_todo', { title: '自检待办', priority: 'high' });
   const note = buildProposal('prepare_create_note', { title: '自检笔记', content: '自检内容' });
   const importantDate = buildProposal('prepare_save_important_date', { title: '自检纪念日', date: '05-20' });
-  if (todo.proposal?.kind !== 'create_todo' || note.proposal?.kind !== 'create_note' || importantDate.proposal?.kind !== 'save_important_date') {
+  const preference = buildProposal('prepare_save_preference', { preference: '先讲结论，再说明原因' });
+  if (todo.proposal?.kind !== 'create_todo' || note.proposal?.kind !== 'create_note' || importantDate.proposal?.kind !== 'save_important_date' || preference.proposal?.kind !== 'save_preference') {
     throw new Error('agent proposal self-test failed');
   }
   if (!normaliseMessages([{ role: 'user', content: '总结资料', attachments: [{ name: '自检文档', content: '自检正文' }] }])[0].content.includes('自检正文')) {
@@ -507,6 +544,9 @@ if (process.env.WORKBENCH_AGENT_SELF_TEST === '1') {
   if (!buildProposal('prepare_create_todo', { title: '无效截止时间', due: 'not-a-date' }).error) {
     throw new Error('agent proposal validation self-test failed');
   }
+  if (!buildProposal('prepare_save_preference', { preference: '  ' }).error) {
+    throw new Error('agent preference validation self-test failed');
+  }
   try {
     store.init(dir);
     if (workspace.listTodos().length !== 0) throw new Error('proposal must not create a todo');
@@ -514,6 +554,9 @@ if (process.env.WORKBENCH_AGENT_SELF_TEST === '1') {
     if (workspace.listTodos().length !== 1) throw new Error('confirmed proposal did not create a todo');
     confirmProposal(importantDate.proposal);
     if (store.getSettings().notify.importantDates.length !== 1) throw new Error('confirmed important date did not save');
+    confirmProposal(preference.proposal);
+    if (!store.getSettings().profile.preferences.includes('先讲结论，再说明原因')) throw new Error('confirmed preference did not save');
+    if (!confirmProposal(preference.proposal).content.includes('已经记住')) throw new Error('duplicate preference should be idempotent');
     try {
       confirmProposal({ kind: 'create_todo', title: '' });
       throw new Error('invalid proposal should be rejected');

@@ -1,5 +1,7 @@
 import { FormEvent, useEffect, useRef, useState } from 'react';
-import { ArrowUp, CalendarDays, Check, ChevronDown, Database, FileText, History, ListPlus, ListTodo, MessageSquare, NotebookPen, Plus, RefreshCw, Settings2, Sparkles, StickyNote, Trash2, X } from 'lucide-react';
+import { ArrowDown, ArrowUp, CalendarDays, Check, ChevronDown, Clock3, Database, FileText, History, ListPlus, ListTodo, MessageSquare, MoreHorizontal, NotebookPen, Pencil, Plus, RefreshCw, Settings2, Sparkles, StickyNote, Trash2, X } from 'lucide-react';
+import AgentMessageContent from '../components/AgentMessageContent';
+import { DEFAULT_CONVERSATION_TITLE, conversationTitleFromMessages, isPlaceholderConversationTitle } from '../components/agentConversationTitle';
 import type { AgentConversation, AgentConversationStore, AgentProposal, AgentRun, AgentRunStatus, AgentSuggestion, AgentTrigger, ChatAttachment, ChatMessage, ProfileItem } from '../types';
 
 const SUGGESTIONS = [
@@ -30,7 +32,7 @@ function createConversation(): AgentConversation {
   const now = new Date().toISOString();
   return {
     id: globalThis.crypto?.randomUUID?.() || `conversation-${Date.now()}`,
-    title: '新对话',
+    title: DEFAULT_CONVERSATION_TITLE,
     messages: [],
     createdAt: now,
     updatedAt: now,
@@ -47,21 +49,23 @@ function normaliseConversationStore(value: AgentConversationStore | ChatMessage[
     const conversation = createConversation();
     return {
       activeId: conversation.id,
-      conversations: [{ ...conversation, title: value.length ? '此前对话' : '新对话', messages: value }],
+      conversations: [{ ...conversation, title: value.length ? conversationTitleFromMessages(value) : DEFAULT_CONVERSATION_TITLE, messages: value }],
     };
   }
   if (value?.conversations?.length) {
-    const activeId = value.conversations.some((conversation) => conversation.id === value.activeId)
+    const conversations = value.conversations.map((conversation) => {
+      const messages = Array.isArray(conversation.messages) ? conversation.messages : [];
+      const title = isPlaceholderConversationTitle(conversation.title) && messages.length
+        ? conversationTitleFromMessages(messages)
+        : String(conversation.title || DEFAULT_CONVERSATION_TITLE).trim() || DEFAULT_CONVERSATION_TITLE;
+      return { ...conversation, messages, title };
+    });
+    const activeId = conversations.some((conversation) => conversation.id === value.activeId)
       ? value.activeId
-      : value.conversations[0].id;
-    return { ...value, activeId };
+      : conversations[0].id;
+    return { ...value, activeId, conversations };
   }
   return createConversationStore();
-}
-
-function conversationTitle(content: string) {
-  const title = content.replace(/\s+/g, ' ').trim();
-  return title.length > 26 ? `${title.slice(0, 26)}…` : title;
 }
 
 export default function Agent({ onOpenSettings }: { onOpenSettings: () => void }) {
@@ -85,8 +89,13 @@ export default function Agent({ onOpenSettings }: { onOpenSettings: () => void }
   const [proactiveBusy, setProactiveBusy] = useState(false);
   const [agentRuns, setAgentRuns] = useState<AgentRun[]>([]);
   const [runsOpen, setRunsOpen] = useState(false);
+  const [suggestionMenuOpen, setSuggestionMenuOpen] = useState<string | null>(null);
+  const [showScrollToBottom, setShowScrollToBottom] = useState(false);
+  const [editingConversationId, setEditingConversationId] = useState<string | null>(null);
+  const [renameDraft, setRenameDraft] = useState('');
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const renameInputRef = useRef<HTMLInputElement>(null);
   const activeConversation = conversationStore.conversations.find((conversation) => conversation.id === conversationStore.activeId)
     || conversationStore.conversations[0];
   const messages = activeConversation?.messages || [];
@@ -98,8 +107,39 @@ export default function Agent({ onOpenSettings }: { onOpenSettings: () => void }
   useEffect(() => {
     window.workbench.agent.status().then(setConfigured).catch(() => setConfigured(false));
     window.workbench.data.getSettings().then((settings) => setModelName(settings.agent.model || '')).catch(() => {});
-    window.workbench.data.getModule('agent').then((saved) => setConversationStore(normaliseConversationStore(saved))).catch(() => {});
+    window.workbench.data.getModule('agent').then((saved) => {
+      const normalised = normaliseConversationStore(saved);
+      setConversationStore(normalised);
+      const savedConversations = Array.isArray(saved) ? [] : saved.conversations;
+      const needsPersist = Array.isArray(saved)
+        || saved.activeId !== normalised.activeId
+        || normalised.conversations.some((conversation) => savedConversations.find((item) => item.id === conversation.id)?.title !== conversation.title);
+      if (needsPersist) window.workbench.data.setModule('agent', normalised).catch(() => {});
+    }).catch(() => {});
   }, []);
+
+  useEffect(() => {
+    if (!composerMenuOpen && !scopeMenuOpen && !modelMenuOpen) return;
+    const closeOnOutside = (event: PointerEvent) => {
+      const target = event.target instanceof Element ? event.target : null;
+      if (target?.closest('[data-agent-composer-toggle], [data-agent-composer-popup]')) return;
+      setComposerMenuOpen(false);
+      setScopeMenuOpen(false);
+      setModelMenuOpen(false);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      setComposerMenuOpen(false);
+      setScopeMenuOpen(false);
+      setModelMenuOpen(false);
+    };
+    document.addEventListener('pointerdown', closeOnOutside);
+    document.addEventListener('keydown', closeOnEscape);
+    return () => {
+      document.removeEventListener('pointerdown', closeOnOutside);
+      document.removeEventListener('keydown', closeOnEscape);
+    };
+  }, [composerMenuOpen, scopeMenuOpen, modelMenuOpen]);
 
   useEffect(() => {
     const stopListening = window.workbench.agent.onProactiveUpdated(() => {
@@ -120,7 +160,20 @@ export default function Agent({ onOpenSettings }: { onOpenSettings: () => void }
   useEffect(() => {
     const el = scrollRef.current;
     if (el) el.scrollTop = el.scrollHeight;
+    setShowScrollToBottom(false);
   }, [messages, streaming, busy, proposal]);
+
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const updateScrollState = () => {
+      const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+      setShowScrollToBottom(distanceFromBottom > 32);
+    };
+    updateScrollState();
+    el.addEventListener('scroll', updateScrollState, { passive: true });
+    return () => el.removeEventListener('scroll', updateScrollState);
+  }, []);
 
   useEffect(() => {
     const input = inputRef.current;
@@ -134,6 +187,41 @@ export default function Agent({ onOpenSettings }: { onOpenSettings: () => void }
   function saveConversationStore(next: AgentConversationStore) {
     setConversationStore(next);
     window.workbench.data.setModule('agent', next).catch(() => {});
+  }
+
+  function cancelRename() {
+    setEditingConversationId(null);
+    setRenameDraft('');
+  }
+
+  function startRename(conversation: AgentConversation) {
+    if (busy || confirming) return;
+    setEditingConversationId(conversation.id);
+    setRenameDraft(conversation.title);
+    requestAnimationFrame(() => {
+      renameInputRef.current?.focus();
+      renameInputRef.current?.select();
+    });
+  }
+
+  function saveConversationRename(id: string) {
+    const conversation = conversationStore.conversations.find((item) => item.id === id);
+    if (!conversation) return cancelRename();
+    const inputTitle = renameDraft.replace(/\s+/g, ' ').trim();
+    const title = inputTitle || (conversation.messages.length ? conversationTitleFromMessages(conversation.messages) : DEFAULT_CONVERSATION_TITLE);
+    saveConversationStore({
+      ...conversationStore,
+      conversations: conversationStore.conversations.map((item) => (
+        item.id === id ? { ...item, title, updatedAt: new Date().toISOString() } : item
+      )),
+    });
+    cancelRename();
+  }
+
+  function toggleSessionMenu() {
+    if (sessionMenuOpen) cancelRename();
+    setSessionMenuOpen((open) => !open);
+    setRunsOpen(false);
   }
 
   function saveMessages(nextMessages: ChatMessage[], title = activeConversation?.title) {
@@ -178,23 +266,32 @@ export default function Agent({ onOpenSettings }: { onOpenSettings: () => void }
     }
   }
 
-  async function updateSuggestion(id: string, status: 'read' | 'dismissed' | 'acted') {
+  async function updateSuggestion(id: string, patch: { status: 'unread' | 'read' | 'dismissed' | 'acted'; followUpAt?: string | null }) {
     try {
-      setProactiveSuggestions(await window.workbench.agent.updateSuggestion(id, { status }));
+      setProactiveSuggestions(await window.workbench.agent.updateSuggestion(id, patch));
+      setSuggestionMenuOpen(null);
     } catch {
       // 主动建议不是主流程，状态更新失败时保留当前页面内容。
     }
+  }
+
+  function tomorrowMorning() {
+    const date = new Date();
+    date.setDate(date.getDate() + 1);
+    date.setHours(9, 0, 0, 0);
+    return date.toISOString();
   }
 
   async function openSuggestionProposal(suggestion: AgentSuggestion) {
     if (!suggestion.proposal || busy || confirming) return;
     setProposal(suggestion.proposal);
     setPendingSuggestionId(suggestion.id);
-    if (suggestion.status === 'unread') await updateSuggestion(suggestion.id, 'read');
+    if (suggestion.status === 'unread') await updateSuggestion(suggestion.id, { status: 'read' });
   }
 
   function startConversation() {
     if (busy || confirming) return;
+    cancelRename();
     const conversation = createConversation();
     saveConversationStore({
       activeId: conversation.id,
@@ -211,6 +308,7 @@ export default function Agent({ onOpenSettings }: { onOpenSettings: () => void }
 
   function selectConversation(id: string) {
     if (busy || confirming || id === conversationStore.activeId) return;
+    cancelRename();
     saveConversationStore({ ...conversationStore, activeId: id });
     setDraft('');
     setStreaming('');
@@ -222,6 +320,7 @@ export default function Agent({ onOpenSettings }: { onOpenSettings: () => void }
 
   function removeConversation(id: string) {
     if (busy || confirming) return;
+    if (editingConversationId === id) cancelRename();
     const remaining = conversationStore.conversations.filter((conversation) => conversation.id !== id);
     if (remaining.length === 0) {
       const conversation = createConversation();
@@ -266,11 +365,21 @@ export default function Agent({ onOpenSettings }: { onOpenSettings: () => void }
     setScopeMenuOpen(false);
   }
 
+  function scrollToBottom() {
+    const el = scrollRef.current;
+    if (!el) return;
+    setShowScrollToBottom(false);
+    el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
+  }
+
   async function submit(text: string) {
     const content = text.trim();
     if (!content || busy || confirming) return;
     const next: ChatMessage[] = [...messages, { role: 'user', content, attachments: attachments.length ? attachments : undefined }];
-    saveMessages(next, messages.length === 0 ? conversationTitle(content) : activeConversation?.title);
+    const title = isPlaceholderConversationTitle(activeConversation?.title)
+      ? conversationTitleFromMessages(next)
+      : activeConversation?.title;
+    saveMessages(next, title);
     setDraft('');
     setAttachments([]);
     setProposal(null);
@@ -299,7 +408,7 @@ export default function Agent({ onOpenSettings }: { onOpenSettings: () => void }
     try {
       const result = await window.workbench.agent.confirmProposal(proposal);
       saveMessages([...messages, { role: 'assistant', content: result.content }]);
-      if (pendingSuggestionId) await updateSuggestion(pendingSuggestionId, 'acted');
+      if (pendingSuggestionId) await updateSuggestion(pendingSuggestionId, { status: 'acted' });
       setProposal(null);
       setPendingSuggestionId(null);
     } catch (err) {
@@ -319,7 +428,7 @@ export default function Agent({ onOpenSettings }: { onOpenSettings: () => void }
       <div className="agent-panel">
         <div className="agent-chat-area">
           <div className="session-menu-shell">
-            <button type="button" className="session-menu-trigger" onClick={() => { setSessionMenuOpen((open) => !open); setRunsOpen(false); }} aria-expanded={sessionMenuOpen} aria-controls="agent-session-menu">
+            <button type="button" className="session-menu-trigger" onClick={toggleSessionMenu} aria-expanded={sessionMenuOpen} aria-controls="agent-session-menu">
               <MessageSquare size={15} />
               <span>会话 · {activeConversation?.title || '新对话'}</span>
             </button>
@@ -330,11 +439,37 @@ export default function Agent({ onOpenSettings }: { onOpenSettings: () => void }
                   <p>会话</p>
                   {conversationStore.conversations.map((conversation) => (
                     <div key={conversation.id} className={`session-item${conversation.id === activeConversation?.id ? ' active' : ''}`}>
-                      <button type="button" className="session-select" onClick={() => selectConversation(conversation.id)} disabled={busy || confirming} title={conversation.title}>
-                        <MessageSquare size={15} />
-                        <span>{conversation.title}</span>
-                      </button>
-                      <button type="button" className="session-remove" onClick={() => removeConversation(conversation.id)} disabled={busy || confirming} aria-label={`删除会话：${conversation.title}`} title="删除会话"><Trash2 size={14} /></button>
+                      {editingConversationId === conversation.id ? (
+                        <form className="session-rename-form" onSubmit={(event) => { event.preventDefault(); saveConversationRename(conversation.id); }}>
+                          <input
+                            ref={renameInputRef}
+                            value={renameDraft}
+                            onChange={(event) => setRenameDraft(event.target.value)}
+                            aria-label="会话名称"
+                            placeholder="输入会话名称"
+                            maxLength={60}
+                            onKeyDown={(event) => {
+                              if (event.key === 'Escape') {
+                                event.preventDefault();
+                                cancelRename();
+                              }
+                            }}
+                          />
+                          <button type="submit" className="session-rename-save" aria-label="保存会话名称" title="保存"><Check size={14} /></button>
+                          <button type="button" className="session-rename-cancel" onClick={cancelRename} aria-label="取消重命名" title="取消"><X size={14} /></button>
+                        </form>
+                      ) : (
+                        <>
+                          <button type="button" className="session-select" onClick={() => selectConversation(conversation.id)} disabled={busy || confirming} title={conversation.title}>
+                            <MessageSquare size={15} />
+                            <span>{conversation.title}</span>
+                          </button>
+                          <div className="session-item-actions">
+                            <button type="button" className="session-rename" onClick={() => startRename(conversation)} disabled={busy || confirming} aria-label={`重命名会话：${conversation.title}`} title="重命名"><Pencil size={13} /></button>
+                            <button type="button" className="session-remove" onClick={() => removeConversation(conversation.id)} disabled={busy || confirming} aria-label={`删除会话：${conversation.title}`} title="删除会话"><Trash2 size={14} /></button>
+                          </div>
+                        </>
+                      )}
                     </div>
                   ))}
                 </nav>
@@ -413,8 +548,14 @@ export default function Agent({ onOpenSettings }: { onOpenSettings: () => void }
                           {suggestion.status === 'acted' ? '已安排' : '安排为待办'}
                         </button>
                       )}
-                      <button type="button" className="text-btn" onClick={() => void updateSuggestion(suggestion.id, 'read')} disabled={suggestion.status === 'read' || suggestion.status === 'acted'}>已了解</button>
-                      <button type="button" className="text-btn agent-suggestion-dismiss" onClick={() => void updateSuggestion(suggestion.id, 'dismissed')}>忽略</button>
+                      <button type="button" className="text-btn" onClick={() => void updateSuggestion(suggestion.id, { status: 'read' })} disabled={suggestion.status === 'read' || suggestion.status === 'acted'}>已了解</button>
+                      <button type="button" className="text-btn agent-suggestion-dismiss" onClick={() => void updateSuggestion(suggestion.id, { status: 'dismissed' })}>忽略</button>
+                      <button type="button" className="text-btn agent-suggestion-more" onClick={() => setSuggestionMenuOpen((current) => current === suggestion.id ? null : suggestion.id)} aria-label="更多主动建议操作" aria-haspopup="menu" aria-expanded={suggestionMenuOpen === suggestion.id} title="更多操作"><MoreHorizontal size={15} /></button>
+                      {suggestionMenuOpen === suggestion.id && (
+                        <div className="agent-suggestion-menu" role="menu">
+                          <button type="button" role="menuitem" onClick={() => void updateSuggestion(suggestion.id, { status: 'unread', followUpAt: tomorrowMorning() })}><Clock3 size={14} />明天上午再看</button>
+                        </div>
+                      )}
                     </div>
                   </article>
                 ))}
@@ -444,14 +585,14 @@ export default function Agent({ onOpenSettings }: { onOpenSettings: () => void }
                       {message.attachments.map((attachment) => <span key={attachment.id}><FileText size={12} />{attachment.name}</span>)}
                     </div>
                   ) : null}
-                  {message.content}
+                  {message.role === 'assistant' ? <AgentMessageContent content={message.content} /> : message.content}
                 </div>
               </div>
             ))}
             {busy && (
               <div className="chat-msg assistant">
                 <div className={`chat-bubble${streaming ? ' streaming' : ' waiting'}`}>
-                  {streaming ? <>{streaming}<span className="stream-cursor" aria-hidden="true" /></> : <LoadingDots />}
+                  {streaming ? <><AgentMessageContent content={streaming} /><span className="stream-cursor" aria-hidden="true" /></> : <LoadingDots />}
                 </div>
               </div>
             )}
@@ -460,10 +601,16 @@ export default function Agent({ onOpenSettings }: { onOpenSettings: () => void }
           </div>
           {error && <p className="form-error chat-error">{error}</p>}
 
-          <form className="chat-form" onSubmit={send}>
-            <div className="chat-composer">
+          <div className="chat-compose-dock">
+            {showScrollToBottom && (
+              <button type="button" className="chat-scroll-bottom" onClick={scrollToBottom} aria-label="滚动到最新消息" title="回到底部">
+                <ArrowDown size={18} strokeWidth={2.2} />
+              </button>
+            )}
+            <form className="chat-form" onSubmit={send}>
+              <div className="chat-composer">
               {composerMenuOpen && (
-                <aside className="composer-menu" aria-label="快捷操作">
+                <aside className="composer-menu" data-agent-composer-popup="true" aria-label="快捷操作">
                   <div className="composer-menu-actions">
                     <button type="button" onClick={() => prepareDraft('帮我添加一条待办：')}><ListPlus size={16} /><span><strong>添加待办</strong><small>交给 Agent 整理后确认</small></span></button>
                     <button type="button" onClick={() => prepareDraft('帮我记录一条备忘录：')}><NotebookPen size={16} /><span><strong>记录备忘录</strong><small>整理后再确认保存</small></span></button>
@@ -477,14 +624,14 @@ export default function Agent({ onOpenSettings }: { onOpenSettings: () => void }
                 </aside>
               )}
               {scopeMenuOpen && (
-                <aside className="composer-scope-menu" aria-label="Agent 工作范围">
+                <aside className="composer-scope-menu" data-agent-composer-popup="true" aria-label="Agent 工作范围">
                   <strong>本次对话可读取</strong>
                   <p>待办、日历、备忘录和资料库</p>
                   <small>创建待办、备忘录和个人日期前，仍会请求你的确认。</small>
                 </aside>
               )}
               {modelMenuOpen && (
-                <aside className="composer-model-menu" aria-label="选择当前会话模型">
+                <aside className="composer-model-menu" data-agent-composer-popup="true" aria-label="选择当前会话模型">
                   <p>设置中已配置的模型</p>
                   {activeModel ? <button type="button" className="active" onClick={() => setModelMenuOpen(false)}>{activeModel}<Check size={14} /></button> : <small className="model-menu-status">请先在设置中配置 Agent 模型。</small>}
                 </aside>
@@ -511,17 +658,18 @@ export default function Agent({ onOpenSettings }: { onOpenSettings: () => void }
               />
               <div className="composer-footer">
                 <div className="composer-footer-start">
-                  <button type="button" className="composer-tool" onClick={toggleComposerMenu} aria-expanded={composerMenuOpen} aria-label="快捷操作" title="快捷操作"><Plus size={18} /></button>
-                  <button type="button" className="composer-access" onClick={() => { setScopeMenuOpen((open) => !open); setComposerMenuOpen(false); setModelMenuOpen(false); }} aria-expanded={scopeMenuOpen}><Database size={16} /> 工作台已连接 <ChevronDown size={14} /></button>
+                  <button type="button" className="composer-tool" data-agent-composer-toggle="true" onClick={toggleComposerMenu} aria-expanded={composerMenuOpen} aria-label="快捷操作" title="快捷操作"><Plus size={18} /></button>
+                  <button type="button" className="composer-access" data-agent-composer-toggle="true" onClick={() => { setScopeMenuOpen((open) => !open); setComposerMenuOpen(false); setModelMenuOpen(false); }} aria-expanded={scopeMenuOpen}><Database size={16} /> 工作台已连接 <ChevronDown size={14} /></button>
                 </div>
                 <div className="composer-footer-end">
-                  <button type="button" className="composer-model" onClick={toggleModelMenu} aria-expanded={modelMenuOpen} title="选择当前会话模型">{activeModel || '选择模型'}<ChevronDown size={14} /></button>
+                  <button type="button" className="composer-model" data-agent-composer-toggle="true" onClick={toggleModelMenu} aria-expanded={modelMenuOpen} title="选择当前会话模型">{activeModel || '选择模型'}<ChevronDown size={14} /></button>
                   <button type="submit" className="agent-send" aria-label="发送消息" title="发送消息" disabled={busy || confirming || !draft.trim()}><ArrowUp size={16} strokeWidth={2.25} /></button>
                 </div>
               </div>
-            </div>
-            <p className="chat-input-hint">Enter 发送 · Shift + Enter 换行</p>
-          </form>
+              </div>
+              <p className="chat-input-hint">Enter 发送 · Shift + Enter 换行</p>
+            </form>
+          </div>
         </div>
       </div>
     </section>
@@ -539,17 +687,20 @@ function LoadingDots() {
 function ProposalCard({ proposal, busy, onConfirm, onCancel }: { proposal: AgentProposal; busy: boolean; onConfirm: () => void; onCancel: () => void }) {
   const isTodo = proposal.kind === 'create_todo';
   const isImportantDate = proposal.kind === 'save_important_date';
+  const isPreference = proposal.kind === 'save_preference';
   return (
     <aside className="agent-proposal" aria-label="待确认操作">
-      <div className="agent-proposal-icon">{isTodo ? <ListTodo size={17} /> : isImportantDate ? <CalendarDays size={17} /> : <StickyNote size={17} />}</div>
+      <div className="agent-proposal-icon">{isTodo ? <ListTodo size={17} /> : isImportantDate ? <CalendarDays size={17} /> : isPreference ? <Settings2 size={17} /> : <StickyNote size={17} />}</div>
       <div className="agent-proposal-content">
         <span>待确认</span>
-        <strong>{isTodo ? '添加待办' : isImportantDate ? '记住重要日期' : '保存备忘录'}</strong>
-        <p>{proposal.title}</p>
+        <strong>{isTodo ? '添加待办' : isImportantDate ? '记住重要日期' : isPreference ? '记住工作偏好' : '保存备忘录'}</strong>
+        <p>{isPreference ? proposal.preference : proposal.title}</p>
         {isTodo ? (
           <small>{priorityLabel[proposal.priority]}{proposal.due ? ` · ${new Date(proposal.due).toLocaleString('zh-CN', { hour12: false })}` : ''}</small>
         ) : isImportantDate ? (
           <small>每年 {proposal.date}</small>
+        ) : isPreference ? (
+          <small>会保存到 Agent 的长期规则</small>
         ) : (
           <small>{proposal.content}</small>
         )}

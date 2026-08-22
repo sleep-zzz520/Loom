@@ -331,7 +331,7 @@ export default function App() {
           setResizingSidebar(true);
         }}
       />
-      <main className="content">
+      <main className={`content${active === 'agent' ? ' content-agent' : ''}`}>
         {active === 'todos' ? (
           <Todos />
         ) : active === 'calendar' ? (

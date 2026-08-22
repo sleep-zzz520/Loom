@@ -7,11 +7,14 @@ const EVENT_DEBOUNCE = 15_000;
 const MAX_EVENT_RUNS_PER_DAY = 3;
 const MAX_RUNS = 120;
 const MAX_SUGGESTIONS = 40;
+const MAX_NOTIFICATION_HISTORY = 500;
+const MAX_TIMER_DELAY = 2_147_483_647;
 const DAILY_TRIGGER = 'daily-briefing';
 const EVENT_TRIGGER = 'event-follow-up';
 
 let checkTimer = null;
 let eventTimer = null;
+let followUpTimer = null;
 let pendingWake = '';
 let running = false;
 let onUpdated = () => {};
@@ -24,9 +27,107 @@ function localDateKey(timestamp = new Date()) {
 
 function listSuggestions() {
   return store.getModule('agentSuggestions')
-    .filter((suggestion) => suggestion.status !== 'dismissed')
+    .filter((suggestion) => !['dismissed', 'acted'].includes(suggestion.status))
+    .filter((suggestion) => {
+      if (!suggestion.followUpAt) return true;
+      const followUpAt = new Date(suggestion.followUpAt).getTime();
+      return Number.isNaN(followUpAt) || followUpAt <= Date.now();
+    })
     .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)))
     .slice(0, MAX_SUGGESTIONS);
+}
+
+function dailyNotificationCount(now = new Date()) {
+  const dateKey = localDateKey(now);
+  return store.getModule('notificationHistory').filter((item) => localDateKey(item.sentAt) === dateKey).length;
+}
+
+function availableNotificationSlots(settings, now = new Date()) {
+  const configuredLimit = Number(settings.notify?.maxDailyNotifications);
+  const limit = Number.isInteger(configuredLimit) && configuredLimit > 0 ? configuredLimit : 5;
+  return Math.max(0, limit - dailyNotificationCount(now));
+}
+
+function normaliseFollowUpAt(value) {
+  if (value === null || value === undefined || value === '') return null;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? undefined : date.toISOString();
+}
+
+function quietHoursEndAt(quietHours, now) {
+  if (!notifier.isWithinQuietHours(quietHours, now)) return null;
+  const match = /^(\d{2}):(\d{2})$/.exec(quietHours?.end || '');
+  if (!match) return null;
+  const endHour = Number(match[1]);
+  const endMinute = Number(match[2]);
+  if (endHour > 23 || endMinute > 59) return null;
+  const end = new Date(now);
+  end.setHours(endHour, endMinute, 0, 0);
+  if (end.getTime() <= now.getTime()) end.setDate(end.getDate() + 1);
+  return end;
+}
+
+function nextLocalDayStart(now) {
+  const next = new Date(now);
+  next.setDate(next.getDate() + 1);
+  next.setHours(0, 1, 0, 0);
+  return next;
+}
+
+function dueFollowUps(now = new Date()) {
+  const nowTime = now.getTime();
+  return store.getModule('agentSuggestions')
+    .filter((suggestion) => !['dismissed', 'acted'].includes(suggestion.status) && suggestion.followUpAt)
+    .filter((suggestion) => {
+      const followUpAt = new Date(suggestion.followUpAt).getTime();
+      return Number.isFinite(followUpAt) && followUpAt <= nowTime;
+    })
+    .sort((a, b) => String(a.followUpAt).localeCompare(String(b.followUpAt)));
+}
+
+function recordSuggestionNotification(suggestion, now, phase) {
+  store.updateModule('notificationHistory', (history) => [
+    {
+      id: store.newId(),
+      eventKey: `agent-suggestion:${suggestion.id}:${phase}`,
+      title: 'Agent 主动发现',
+      body: `${suggestion.title}\n${suggestion.summary}`.slice(0, 300),
+      sentAt: now.toISOString(),
+    },
+    ...history,
+  ].slice(0, MAX_NOTIFICATION_HISTORY));
+}
+
+function scheduleFollowUpWake() {
+  if (followUpTimer) {
+    clearTimeout(followUpTimer);
+    followUpTimer = null;
+  }
+  const now = new Date();
+  const settings = store.getSettings();
+  const suggestions = store.getModule('agentSuggestions')
+    .filter((suggestion) => !['dismissed', 'acted'].includes(suggestion.status) && suggestion.followUpAt);
+  const due = dueFollowUps(now);
+  let nextFollowUpAt = suggestions
+    .map((suggestion) => new Date(suggestion.followUpAt).getTime())
+    .filter((timestamp) => Number.isFinite(timestamp) && timestamp > now.getTime())
+    .sort((a, b) => a - b)[0];
+  if (due.length) {
+    const quietEnd = quietHoursEndAt(settings.notify?.quietHours, now);
+    nextFollowUpAt = quietEnd
+      ? quietEnd.getTime()
+      : availableNotificationSlots(settings, now) > 0
+        ? now.getTime() + 1_000
+        : nextLocalDayStart(now).getTime();
+  }
+  if (!nextFollowUpAt) return;
+  const delay = Math.min(Math.max(nextFollowUpAt - now.getTime(), 1_000), MAX_TIMER_DELAY);
+  followUpTimer = setTimeout(() => {
+    followUpTimer = null;
+    deliverDueFollowUps();
+    scheduleFollowUpWake();
+  }, delay);
+  followUpTimer.unref?.();
 }
 
 function notifyUpdated() {
@@ -90,15 +191,20 @@ function saveSuggestion(result, now, options = {}) {
     createdAt: now.toISOString(),
     updatedAt: now.toISOString(),
     notifiedAt: null,
+    followUpAt: normaliseFollowUpAt(result.followUpAt) || null,
   };
   store.updateModule('agentSuggestions', (suggestions) => [suggestion, ...suggestions].slice(0, MAX_SUGGESTIONS));
+  scheduleFollowUpWake();
   return suggestion;
 }
 
 function markNotified(id, now) {
+  const suggestion = store.getModule('agentSuggestions').find((item) => item.id === id);
+  if (!suggestion) return;
   store.updateModule('agentSuggestions', (suggestions) => suggestions.map((suggestion) => (
     suggestion.id === id ? { ...suggestion, notifiedAt: now.toISOString(), updatedAt: now.toISOString() } : suggestion
   )));
+  recordSuggestionNotification(suggestion, now, 'initial');
 }
 
 function showDesktopNotification(suggestion) {
@@ -147,7 +253,7 @@ async function runCheck({
           : `${EVENT_TRIGGER}:${run.id}`),
       });
       if (!suggestion.notifiedAt) {
-        if (notify) {
+        if (notify && availableNotificationSlots(settings, now) > 0) {
           showDesktopNotification(suggestion);
           markNotified(suggestion.id, now);
         }
@@ -164,6 +270,27 @@ async function runCheck({
     notifyUpdated();
   }
   return listSuggestions();
+}
+
+function deliverDueFollowUps({ now = new Date(), deliver = showDesktopNotification } = {}) {
+  const due = dueFollowUps(now);
+  if (!due.length || notifier.isWithinQuietHours(store.getSettings().notify?.quietHours, now)) return 0;
+  const settings = store.getSettings();
+  const selected = due.slice(0, availableNotificationSlots(settings, now));
+  if (!selected.length) return 0;
+  selected.forEach((suggestion) => deliver(suggestion));
+  store.updateModule('agentSuggestions', (suggestions) => suggestions.map((suggestion) => {
+    if (!selected.some((item) => item.id === suggestion.id)) return suggestion;
+    return {
+      ...suggestion,
+      followUpAt: null,
+      notifiedAt: now.toISOString(),
+      updatedAt: now.toISOString(),
+    };
+  }));
+  selected.forEach((suggestion) => recordSuggestionNotification(suggestion, now, 'follow-up'));
+  notifyUpdated();
+  return selected.length;
 }
 
 async function checkNow({ force = false, now: requestedNow, notify = true } = {}) {
@@ -205,11 +332,20 @@ function wake({ source = 'workspace', detail = '' } = {}) {
 function updateSuggestion(id, patch = {}) {
   const allowedStatuses = ['unread', 'read', 'dismissed', 'acted'];
   if (!allowedStatuses.includes(patch.status)) return listSuggestions();
+  const hasFollowUpAt = Object.prototype.hasOwnProperty.call(patch, 'followUpAt');
+  const followUpAt = hasFollowUpAt ? normaliseFollowUpAt(patch.followUpAt) : undefined;
+  if (hasFollowUpAt && followUpAt === undefined) return listSuggestions();
   store.updateModule('agentSuggestions', (suggestions) => suggestions.map((suggestion) => {
     if (suggestion.id !== id) return suggestion;
     if (patch.status === 'acted' && !suggestion.proposal) return suggestion;
-    return { ...suggestion, status: patch.status, updatedAt: new Date().toISOString() };
+    return {
+      ...suggestion,
+      status: patch.status,
+      ...(hasFollowUpAt ? { followUpAt } : {}),
+      updatedAt: new Date().toISOString(),
+    };
   }));
+  scheduleFollowUpWake();
   notifyUpdated();
   return listSuggestions();
 }
@@ -218,6 +354,8 @@ function start(options = {}) {
   stop();
   onUpdated = options.onUpdated || (() => {});
   onOpenAgent = options.onOpenAgent || (() => {});
+  deliverDueFollowUps();
+  scheduleFollowUpWake();
   void checkNow();
   checkTimer = setInterval(() => { void checkNow(); }, CHECK_INTERVAL);
   console.log('[proactive] 主动简报检查已启动（间隔 60 秒，每天最多一次）');
@@ -231,6 +369,10 @@ function stop() {
   if (eventTimer) {
     clearTimeout(eventTimer);
     eventTimer = null;
+  }
+  if (followUpTimer) {
+    clearTimeout(followUpTimer);
+    followUpTimer = null;
   }
   pendingWake = '';
 }
@@ -246,6 +388,9 @@ module.exports = {
   localDateKey,
   hasRunForDate,
   countRunsForDate,
+  dailyNotificationCount,
+  dueFollowUps,
+  deliverDueFollowUps,
   saveSuggestion,
 };
 
@@ -277,8 +422,47 @@ if (process.env.WORKBENCH_PROACTIVE_SELF_TEST === '1') {
       proposal: { kind: 'create_todo', title: '自检行动', priority: 'medium', due: null },
     }, directNow, { dedupeKey: 'self-test-actionable' });
     updateSuggestion(actionableSuggestion.id, { status: 'acted' });
-    assert.equal(listSuggestions().find((item) => item.id === actionableSuggestion.id)?.status, 'acted');
+    assert.equal(listSuggestions().find((item) => item.id === actionableSuggestion.id), undefined);
+    assert.equal(store.getModule('agentSuggestions').find((item) => item.id === actionableSuggestion.id)?.status, 'acted');
     updateSuggestion(actionableSuggestion.id, { status: 'dismissed' });
+
+    const followUpSuggestion = saveSuggestion({
+      title: '稍后再看',
+      summary: '这条建议暂时不需要马上处理。',
+      reason: '主动检查自检。',
+      references: [],
+    }, directNow, { dedupeKey: 'self-test-follow-up' });
+    const followUpAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+    updateSuggestion(followUpSuggestion.id, { status: 'read', followUpAt });
+    assert.equal(listSuggestions().find((item) => item.id === followUpSuggestion.id), undefined);
+    assert.equal(store.getModule('agentSuggestions').find((item) => item.id === followUpSuggestion.id)?.followUpAt, followUpAt);
+    updateSuggestion(followUpSuggestion.id, { status: 'read', followUpAt: null });
+    assert.equal(listSuggestions().find((item) => item.id === followUpSuggestion.id)?.id, followUpSuggestion.id);
+    updateSuggestion(followUpSuggestion.id, {
+      status: 'read',
+      followUpAt: new Date(directNow.getTime() - 1_000).toISOString(),
+    });
+    let followUpDeliveryCount = 0;
+    assert.equal(deliverDueFollowUps({ now: directNow, deliver: () => { followUpDeliveryCount += 1; } }), 1);
+    assert.equal(followUpDeliveryCount, 1);
+    assert.equal(store.getModule('agentSuggestions').find((item) => item.id === followUpSuggestion.id)?.followUpAt, null);
+    assert.equal(dailyNotificationCount(directNow), 1);
+    updateSuggestion(followUpSuggestion.id, { status: 'dismissed' });
+
+    store.setSettings({ notify: { maxDailyNotifications: 1 } });
+    const cappedFollowUp = saveSuggestion({
+      title: '达到上限后不打扰',
+      summary: '这条跟进应保留在页面中，但不会再次弹出通知。',
+      reason: '主动检查自检。',
+      references: [],
+    }, directNow, { dedupeKey: 'self-test-capped-follow-up' });
+    updateSuggestion(cappedFollowUp.id, {
+      status: 'read',
+      followUpAt: new Date(directNow.getTime() - 1_000).toISOString(),
+    });
+    assert.equal(deliverDueFollowUps({ now: directNow, deliver: () => { throw new Error('notification cap should prevent delivery'); } }), 0);
+    assert.equal(store.getModule('agentSuggestions').find((item) => item.id === cappedFollowUp.id)?.followUpAt, new Date(directNow.getTime() - 1_000).toISOString());
+    updateSuggestion(cappedFollowUp.id, { status: 'dismissed' });
 
     store.setSettings({ agent: { apiBase: 'http://agent-self-test.invalid', apiKey: 'test-key', model: 'test-model' } });
     store.updateModule('todos', () => [{
