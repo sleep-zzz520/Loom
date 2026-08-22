@@ -204,21 +204,23 @@ function readTool(name, args) {
 
 function buildProposal(name, args) {
   if (name === 'prepare_create_todo') {
-    const title = String(args.title || '').trim();
+    const title = safeText(args.title, 200).trim();
     if (!title) return { error: '待办标题不能为空' };
+    const due = args.due ? safeText(args.due, 80).trim() || null : null;
+    if (due && Number.isNaN(new Date(due).getTime())) return { error: '截止时间无效' };
     return {
       proposal: {
         kind: 'create_todo',
         title,
         priority: ['high', 'medium', 'low'].includes(args.priority) ? args.priority : 'medium',
-        due: args.due ? String(args.due) : null,
+        due,
       },
       content: `已准备好“${title}”，确认后才会添加到待办。`,
     };
   }
   if (name === 'prepare_create_note') {
-    const title = String(args.title || '').trim();
-    const content = String(args.content || '').trim();
+    const title = safeText(args.title, 200).trim();
+    const content = safeText(args.content, 5000).trim();
     if (!title || !content) return { error: '笔记需要标题和内容' };
     return {
       proposal: { kind: 'create_note', title, content },
@@ -226,8 +228,8 @@ function buildProposal(name, args) {
     };
   }
   if (name === 'prepare_save_important_date') {
-    const title = String(args.title || '').trim();
-    const date = String(args.date || '').trim();
+    const title = safeText(args.title, 200).trim();
+    const date = safeText(args.date, 20).trim();
     const match = /^(\d{2})-(\d{2})$/.exec(date);
     const month = match ? Number(match[1]) : 0;
     const day = match ? Number(match[2]) : 0;
@@ -240,6 +242,17 @@ function buildProposal(name, args) {
     };
   }
   return null;
+}
+
+function normaliseProposal(value) {
+  if (!value || typeof value !== 'object') return null;
+  const nameByKind = {
+    create_todo: 'prepare_create_todo',
+    create_note: 'prepare_create_note',
+    save_important_date: 'prepare_save_important_date',
+  };
+  const prepared = buildProposal(nameByKind[value.kind], value);
+  return prepared?.proposal || null;
 }
 
 function normaliseToolCalls(calls) {
@@ -374,12 +387,14 @@ function parseProactiveResponse(value) {
         label: safeText(reference.label, 160),
       }))
     : [];
+  const proposal = normaliseProposal(parsed.proposal);
   return {
     action: 'notify',
     title,
     summary,
     reason: safeText(parsed.reason, 600).trim() || 'Agent 根据工作台中的近期信息判断这件事值得你关注。',
     references,
+    proposal,
   };
 }
 
@@ -404,7 +419,8 @@ async function runProactive(settings, now = new Date(), options = {}) {
           ? '事件跟进提醒要关注“变化之后下一步是否值得做”，例如新待办临近截止、资料更新后需要补充行动、笔记内容与当前安排产生关联；不要仅仅复述用户刚刚做了什么。'
           : '每日主动简报重点关注今天和未来 48 小时内的安排、已超期或长期未完成的开放待办、最近需要准备的事情，以及近期新增资料或备忘录中与当前重点有关的内容。',
         '输出必须是一个 JSON 对象，不要输出 Markdown、解释文字或代码围栏。',
-        '有提醒时格式：{"action":"notify","title":"不超过 20 个字的标题","summary":"简洁说明发生了什么以及建议关注什么","reason":"说明为什么现在提醒","references":[{"type":"todo|schedule|note|library","id":"真实数据 ID","label":"数据名称"}]}。',
+        '有提醒时格式：{"action":"notify","title":"不超过 20 个字的标题","summary":"简洁说明发生了什么以及建议关注什么","reason":"说明为什么现在提醒","references":[{"type":"todo|schedule|note|library","id":"真实数据 ID","label":"数据名称"}],"proposal":{"kind":"create_todo","title":"明确的下一步","priority":"high|medium|low","due":"ISO 时间或 null"}}。',
+        '只有下一步非常明确、值得用户直接安排时才附带 proposal；proposal 只会进入待确认卡片，不会在后台自动创建。没有明确下一步时省略 proposal。',
         '没有值得提醒的事情时只输出：{"action":"no_action"}。',
       ].join('\n'),
     },
@@ -433,27 +449,28 @@ async function runProactive(settings, now = new Date(), options = {}) {
 }
 
 function confirmProposal(proposal) {
-  if (!proposal || typeof proposal !== 'object') throw new Error('确认内容无效');
-  if (proposal.kind === 'create_todo') {
-    const todos = workspace.createTodo({ title: proposal.title, priority: proposal.priority, due: proposal.due || null });
+  const safeProposal = normaliseProposal(proposal);
+  if (!safeProposal) throw new Error('确认内容无效或已过期');
+  if (safeProposal.kind === 'create_todo') {
+    const todos = workspace.createTodo({ title: safeProposal.title, priority: safeProposal.priority, due: safeProposal.due || null });
     return { content: `已添加待办“${todos[0].title}”。` };
   }
-  if (proposal.kind === 'create_note') {
-    const notes = workspace.saveNote({ title: proposal.title, content: proposal.content });
+  if (safeProposal.kind === 'create_note') {
+    const notes = workspace.saveNote({ title: safeProposal.title, content: safeProposal.content });
     return { content: `已保存备忘录“${notes[0].title}”。` };
   }
-  if (proposal.kind === 'save_important_date') {
+  if (safeProposal.kind === 'save_important_date') {
     const settings = store.getSettings();
     const dates = Array.isArray(settings.notify?.importantDates) ? settings.notify.importantDates : [];
-    if (dates.some((item) => item.title === proposal.title && item.date === proposal.date)) {
-      return { content: `个人日期“${proposal.title}”已存在。` };
+    if (dates.some((item) => item.title === safeProposal.title && item.date === safeProposal.date)) {
+      return { content: `个人日期“${safeProposal.title}”已存在。` };
     }
     store.setSettings({
       notify: {
-        importantDates: [...dates, { id: store.newId(), title: proposal.title, date: proposal.date }],
+        importantDates: [...dates, { id: store.newId(), title: safeProposal.title, date: safeProposal.date }],
       },
     });
-    return { content: `已记住：每年 ${proposal.date} 是“${proposal.title}”。` };
+    return { content: `已记住：每年 ${safeProposal.date} 是“${safeProposal.title}”。` };
   }
   throw new Error('暂不支持该确认操作');
 }
@@ -480,8 +497,15 @@ if (process.env.WORKBENCH_AGENT_SELF_TEST === '1') {
   if (parseProactiveResponse('{"action":"notify","title":"检查","summary":"有一件事需要关注","reason":"临近截止"}').action !== 'notify') {
     throw new Error('agent proactive response self-test failed');
   }
+  const proactiveWithProposal = parseProactiveResponse('{"action":"notify","title":"准备方案","summary":"方案即将到期","proposal":{"kind":"create_todo","title":"确认方案下一步","priority":"high","due":"2026-08-23T12:00:00.000Z"}}');
+  if (proactiveWithProposal.proposal?.kind !== 'create_todo' || proactiveWithProposal.proposal.priority !== 'high') {
+    throw new Error('agent proactive proposal self-test failed');
+  }
   if (parseProactiveResponse('{"action":"notify","title":"","summary":"无效"}').action !== 'no_action') {
     throw new Error('agent proactive response guard self-test failed');
+  }
+  if (!buildProposal('prepare_create_todo', { title: '无效截止时间', due: 'not-a-date' }).error) {
+    throw new Error('agent proposal validation self-test failed');
   }
   try {
     store.init(dir);
@@ -490,6 +514,12 @@ if (process.env.WORKBENCH_AGENT_SELF_TEST === '1') {
     if (workspace.listTodos().length !== 1) throw new Error('confirmed proposal did not create a todo');
     confirmProposal(importantDate.proposal);
     if (store.getSettings().notify.importantDates.length !== 1) throw new Error('confirmed important date did not save');
+    try {
+      confirmProposal({ kind: 'create_todo', title: '' });
+      throw new Error('invalid proposal should be rejected');
+    } catch (error) {
+      if (!String(error.message).includes('确认内容无效')) throw error;
+    }
     console.log('agent self-test ok');
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });

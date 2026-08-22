@@ -1,6 +1,6 @@
 import { FormEvent, useEffect, useRef, useState } from 'react';
-import { ArrowUp, CalendarDays, Check, ChevronDown, Database, FileText, ListPlus, ListTodo, MessageSquare, NotebookPen, Plus, RefreshCw, Settings2, Sparkles, StickyNote, Trash2, X } from 'lucide-react';
-import type { AgentConversation, AgentConversationStore, AgentProposal, AgentSuggestion, ChatAttachment, ChatMessage, ProfileItem } from '../types';
+import { ArrowUp, CalendarDays, Check, ChevronDown, Database, FileText, History, ListPlus, ListTodo, MessageSquare, NotebookPen, Plus, RefreshCw, Settings2, Sparkles, StickyNote, Trash2, X } from 'lucide-react';
+import type { AgentConversation, AgentConversationStore, AgentProposal, AgentRun, AgentRunStatus, AgentSuggestion, AgentTrigger, ChatAttachment, ChatMessage, ProfileItem } from '../types';
 
 const SUGGESTIONS = [
   '今天有什么要做？',
@@ -10,6 +10,21 @@ const SUGGESTIONS = [
 ];
 
 const priorityLabel = { high: '高优先级', medium: '中优先级', low: '低优先级' };
+const runTriggerLabel: Record<AgentTrigger, string> = {
+  'daily-briefing': '每日简报',
+  'event-follow-up': '事件跟进',
+};
+const runStatusLabel: Record<AgentRunStatus, string> = {
+  running: '检查中',
+  completed: '已完成',
+  failed: '失败',
+};
+
+function formatRunTime(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '时间未知';
+  return date.toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
 
 function createConversation(): AgentConversation {
   const now = new Date().toISOString();
@@ -57,6 +72,7 @@ export default function Agent({ onOpenSettings }: { onOpenSettings: () => void }
   const [proposal, setProposal] = useState<AgentProposal | null>(null);
   const [busy, setBusy] = useState(false);
   const [confirming, setConfirming] = useState(false);
+  const [pendingSuggestionId, setPendingSuggestionId] = useState<string | null>(null);
   const [error, setError] = useState('');
   const [sessionMenuOpen, setSessionMenuOpen] = useState(false);
   const [composerMenuOpen, setComposerMenuOpen] = useState(false);
@@ -67,6 +83,8 @@ export default function Agent({ onOpenSettings }: { onOpenSettings: () => void }
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
   const [proactiveSuggestions, setProactiveSuggestions] = useState<AgentSuggestion[]>([]);
   const [proactiveBusy, setProactiveBusy] = useState(false);
+  const [agentRuns, setAgentRuns] = useState<AgentRun[]>([]);
+  const [runsOpen, setRunsOpen] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const activeConversation = conversationStore.conversations.find((conversation) => conversation.id === conversationStore.activeId)
@@ -86,10 +104,15 @@ export default function Agent({ onOpenSettings }: { onOpenSettings: () => void }
   useEffect(() => {
     const stopListening = window.workbench.agent.onProactiveUpdated(() => {
       void loadProactiveSuggestions();
+      void loadAgentRuns();
     });
     void loadProactiveSuggestions();
+    void loadAgentRuns();
     void window.workbench.agent.checkProactive()
-      .then((suggestions) => setProactiveSuggestions(suggestions))
+      .then((suggestions) => {
+        setProactiveSuggestions(suggestions);
+        void loadAgentRuns();
+      })
       .catch(() => {});
     return stopListening;
   }, []);
@@ -134,6 +157,15 @@ export default function Agent({ onOpenSettings }: { onOpenSettings: () => void }
     }
   }
 
+  async function loadAgentRuns() {
+    try {
+      const runs = await window.workbench.data.getModule('agentRuns');
+      setAgentRuns(runs.slice(0, 8));
+    } catch {
+      setAgentRuns([]);
+    }
+  }
+
   async function refreshProactive() {
     if (proactiveBusy) return;
     setProactiveBusy(true);
@@ -146,12 +178,19 @@ export default function Agent({ onOpenSettings }: { onOpenSettings: () => void }
     }
   }
 
-  async function updateSuggestion(id: string, status: 'read' | 'dismissed') {
+  async function updateSuggestion(id: string, status: 'read' | 'dismissed' | 'acted') {
     try {
       setProactiveSuggestions(await window.workbench.agent.updateSuggestion(id, { status }));
     } catch {
       // 主动建议不是主流程，状态更新失败时保留当前页面内容。
     }
+  }
+
+  async function openSuggestionProposal(suggestion: AgentSuggestion) {
+    if (!suggestion.proposal || busy || confirming) return;
+    setProposal(suggestion.proposal);
+    setPendingSuggestionId(suggestion.id);
+    if (suggestion.status === 'unread') await updateSuggestion(suggestion.id, 'read');
   }
 
   function startConversation() {
@@ -164,6 +203,7 @@ export default function Agent({ onOpenSettings }: { onOpenSettings: () => void }
     setDraft('');
     setStreaming('');
     setProposal(null);
+    setPendingSuggestionId(null);
     setError('');
     setSessionMenuOpen(false);
     requestAnimationFrame(() => inputRef.current?.focus());
@@ -175,6 +215,7 @@ export default function Agent({ onOpenSettings }: { onOpenSettings: () => void }
     setDraft('');
     setStreaming('');
     setProposal(null);
+    setPendingSuggestionId(null);
     setError('');
     setSessionMenuOpen(false);
   }
@@ -193,6 +234,7 @@ export default function Agent({ onOpenSettings }: { onOpenSettings: () => void }
     }
     setDraft('');
     setProposal(null);
+    setPendingSuggestionId(null);
     setError('');
   }
 
@@ -232,6 +274,7 @@ export default function Agent({ onOpenSettings }: { onOpenSettings: () => void }
     setDraft('');
     setAttachments([]);
     setProposal(null);
+    setPendingSuggestionId(null);
     setStreaming('');
     setBusy(true);
     setError('');
@@ -256,7 +299,9 @@ export default function Agent({ onOpenSettings }: { onOpenSettings: () => void }
     try {
       const result = await window.workbench.agent.confirmProposal(proposal);
       saveMessages([...messages, { role: 'assistant', content: result.content }]);
+      if (pendingSuggestionId) await updateSuggestion(pendingSuggestionId, 'acted');
       setProposal(null);
+      setPendingSuggestionId(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : '保存失败，请稍后重试');
     } finally {
@@ -273,6 +318,69 @@ export default function Agent({ onOpenSettings }: { onOpenSettings: () => void }
     <section className="module-page agent-page">
       <div className="agent-panel">
         <div className="agent-chat-area">
+          <div className="session-menu-shell">
+            <button type="button" className="session-menu-trigger" onClick={() => { setSessionMenuOpen((open) => !open); setRunsOpen(false); }} aria-expanded={sessionMenuOpen} aria-controls="agent-session-menu">
+              <MessageSquare size={15} />
+              <span>会话 · {activeConversation?.title || '新对话'}</span>
+            </button>
+            {sessionMenuOpen && (
+              <aside id="agent-session-menu" className="agent-session-menu" aria-label="Agent 会话">
+                <button type="button" className="session-new" onClick={startConversation} disabled={busy || confirming}><Plus size={16} /> 新建对话</button>
+                <nav className="session-list" aria-label="会话列表">
+                  <p>会话</p>
+                  {conversationStore.conversations.map((conversation) => (
+                    <div key={conversation.id} className={`session-item${conversation.id === activeConversation?.id ? ' active' : ''}`}>
+                      <button type="button" className="session-select" onClick={() => selectConversation(conversation.id)} disabled={busy || confirming} title={conversation.title}>
+                        <MessageSquare size={15} />
+                        <span>{conversation.title}</span>
+                      </button>
+                      <button type="button" className="session-remove" onClick={() => removeConversation(conversation.id)} disabled={busy || confirming} aria-label={`删除会话：${conversation.title}`} title="删除会话"><Trash2 size={14} /></button>
+                    </div>
+                  ))}
+                </nav>
+                <div className="session-connection">
+                  <span className="agent-status"><span className={configured ? 'status-dot on' : 'status-dot'} />{configured ? '已连接' : '未配置'}</span>
+                  {!configured && <button type="button" className="text-btn" onClick={onOpenSettings}><Settings2 size={15} /> 配置</button>}
+                </div>
+                {agentRuns.length > 0 && (
+                  <div className={`session-run-history${runsOpen ? ' is-open' : ''}`}>
+                    <button type="button" className="session-run-trigger" onClick={() => setRunsOpen((open) => !open)} aria-expanded={runsOpen} aria-controls="agent-session-runs">
+                      <span><History size={14} />最近主动运行 <small>{agentRuns.length} 条</small></span>
+                      <ChevronDown size={14} />
+                    </button>
+                    {runsOpen && (
+                      <div id="agent-session-runs" className="session-run-list">
+                        {agentRuns.map((run) => {
+                          const suggestion = run.suggestionId
+                            ? proactiveSuggestions.find((item) => item.id === run.suggestionId)
+                            : null;
+                          const summary = run.status === 'failed'
+                            ? run.error || '主动检查失败'
+                            : suggestion
+                              ? `生成建议：${suggestion.title}`
+                              : run.suggestionId
+                                ? '已生成一条主动建议（当前已从列表隐藏）'
+                                : run.status === 'running'
+                                  ? '正在读取工作台上下文'
+                                  : '检查完成，没有生成新的提醒';
+                          return (
+                            <article key={run.id} className="session-run-entry">
+                              <span className={`agent-run-status-dot${run.status === 'running' ? ' is-running' : ''}${run.status === 'failed' ? ' is-failed' : ''}`} aria-hidden="true" />
+                              <div className="agent-run-copy">
+                                <strong>{runTriggerLabel[run.trigger]} · {runStatusLabel[run.status]}</strong>
+                                <small title={summary}>{summary}</small>
+                              </div>
+                              <time className="agent-run-meta" dateTime={run.startedAt}>{formatRunTime(run.startedAt)}</time>
+                            </article>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </aside>
+            )}
+          </div>
           {proactiveSuggestions.length > 0 && (
             <section className="agent-proactive" aria-labelledby="agent-proactive-title">
               <div className="agent-proactive-head">
@@ -287,7 +395,7 @@ export default function Agent({ onOpenSettings }: { onOpenSettings: () => void }
               </div>
               <div className="agent-proactive-list">
                 {proactiveSuggestions.map((suggestion) => (
-                  <article key={suggestion.id} className={`agent-suggestion${suggestion.status === 'unread' ? ' is-unread' : ''}`}>
+                  <article key={suggestion.id} className={`agent-suggestion${suggestion.status === 'unread' ? ' is-unread' : ''}${suggestion.status === 'acted' ? ' is-acted' : ''}`}>
                     <div className="agent-suggestion-icon"><Sparkles size={16} /></div>
                     <div className="agent-suggestion-main">
                       <h3>{suggestion.title}</h3>
@@ -300,7 +408,12 @@ export default function Agent({ onOpenSettings }: { onOpenSettings: () => void }
                       )}
                     </div>
                     <div className="agent-suggestion-actions">
-                      <button type="button" className="text-btn" onClick={() => void updateSuggestion(suggestion.id, 'read')} disabled={suggestion.status === 'read'}>已了解</button>
+                      {suggestion.proposal?.kind === 'create_todo' && (
+                        <button type="button" className="text-btn agent-suggestion-act" onClick={() => void openSuggestionProposal(suggestion)} disabled={busy || confirming || suggestion.status === 'acted'}>
+                          {suggestion.status === 'acted' ? '已安排' : '安排为待办'}
+                        </button>
+                      )}
+                      <button type="button" className="text-btn" onClick={() => void updateSuggestion(suggestion.id, 'read')} disabled={suggestion.status === 'read' || suggestion.status === 'acted'}>已了解</button>
                       <button type="button" className="text-btn agent-suggestion-dismiss" onClick={() => void updateSuggestion(suggestion.id, 'dismissed')}>忽略</button>
                     </div>
                   </article>
@@ -309,33 +422,6 @@ export default function Agent({ onOpenSettings }: { onOpenSettings: () => void }
             </section>
           )}
           <div className="chat-list" ref={scrollRef} aria-live="polite">
-            <div className="session-menu-shell">
-              <button type="button" className="session-menu-trigger" onClick={() => setSessionMenuOpen((open) => !open)} aria-expanded={sessionMenuOpen} aria-controls="agent-session-menu">
-                <MessageSquare size={15} />
-                <span>会话 · {activeConversation?.title || '新对话'}</span>
-              </button>
-              {sessionMenuOpen && (
-                <aside id="agent-session-menu" className="agent-session-menu" aria-label="Agent 会话">
-                  <button type="button" className="session-new" onClick={startConversation} disabled={busy || confirming}><Plus size={16} /> 新建对话</button>
-                  <nav className="session-list" aria-label="会话列表">
-                    <p>会话</p>
-                    {conversationStore.conversations.map((conversation) => (
-                      <div key={conversation.id} className={`session-item${conversation.id === activeConversation?.id ? ' active' : ''}`}>
-                        <button type="button" className="session-select" onClick={() => selectConversation(conversation.id)} disabled={busy || confirming} title={conversation.title}>
-                          <MessageSquare size={15} />
-                          <span>{conversation.title}</span>
-                        </button>
-                        <button type="button" className="session-remove" onClick={() => removeConversation(conversation.id)} disabled={busy || confirming} aria-label={`删除会话：${conversation.title}`} title="删除会话"><Trash2 size={14} /></button>
-                      </div>
-                    ))}
-                  </nav>
-                  <div className="session-connection">
-                    <span className="agent-status"><span className={configured ? 'status-dot on' : 'status-dot'} />{configured ? '已连接' : '未配置'}</span>
-                    {!configured && <button type="button" className="text-btn" onClick={onOpenSettings}><Settings2 size={15} /> 配置</button>}
-                  </div>
-                </aside>
-              )}
-            </div>
             <div className="chat-feed">
             {messages.length === 0 && !streaming && (
               <div className="chat-empty">
@@ -369,7 +455,7 @@ export default function Agent({ onOpenSettings }: { onOpenSettings: () => void }
                 </div>
               </div>
             )}
-            {proposal && <ProposalCard proposal={proposal} busy={confirming} onConfirm={confirmProposal} onCancel={() => setProposal(null)} />}
+            {proposal && <ProposalCard proposal={proposal} busy={confirming} onConfirm={confirmProposal} onCancel={() => { setProposal(null); setPendingSuggestionId(null); }} />}
             </div>
           </div>
           {error && <p className="form-error chat-error">{error}</p>}

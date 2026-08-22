@@ -146,7 +146,7 @@ export interface AgentConversationStore {
 
 export type AgentTrigger = 'daily-briefing' | 'event-follow-up';
 export type AgentRunStatus = 'running' | 'completed' | 'failed';
-export type AgentSuggestionStatus = 'unread' | 'read' | 'dismissed';
+export type AgentSuggestionStatus = 'unread' | 'read' | 'dismissed' | 'acted';
 
 export interface AgentSuggestionReference {
   type: 'todo' | 'schedule' | 'note' | 'library';
@@ -162,6 +162,7 @@ export interface AgentSuggestion {
   summary: string;
   reason: string;
   references: AgentSuggestionReference[];
+  proposal?: AgentProposal | null;
   status: AgentSuggestionStatus;
   createdAt: string;
   updatedAt: string;

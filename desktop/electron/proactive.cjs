@@ -85,6 +85,7 @@ function saveSuggestion(result, now, options = {}) {
     summary: result.summary,
     reason: result.reason,
     references: result.references || [],
+    proposal: result.proposal || null,
     status: 'unread',
     createdAt: now.toISOString(),
     updatedAt: now.toISOString(),
@@ -202,13 +203,13 @@ function wake({ source = 'workspace', detail = '' } = {}) {
 }
 
 function updateSuggestion(id, patch = {}) {
-  const allowedStatuses = ['unread', 'read', 'dismissed'];
+  const allowedStatuses = ['unread', 'read', 'dismissed', 'acted'];
   if (!allowedStatuses.includes(patch.status)) return listSuggestions();
-  store.updateModule('agentSuggestions', (suggestions) => suggestions.map((suggestion) => (
-    suggestion.id === id
-      ? { ...suggestion, status: patch.status, updatedAt: new Date().toISOString() }
-      : suggestion
-  )));
+  store.updateModule('agentSuggestions', (suggestions) => suggestions.map((suggestion) => {
+    if (suggestion.id !== id) return suggestion;
+    if (patch.status === 'acted' && !suggestion.proposal) return suggestion;
+    return { ...suggestion, status: patch.status, updatedAt: new Date().toISOString() };
+  }));
   notifyUpdated();
   return listSuggestions();
 }
@@ -268,6 +269,16 @@ if (process.env.WORKBENCH_PROACTIVE_SELF_TEST === '1') {
     assert.equal(hasRunForDate(localDateKey(directNow)), false);
     updateSuggestion(directSuggestion.id, { status: 'dismissed' });
     assert.equal(listSuggestions().length, 0);
+    const actionableSuggestion = saveSuggestion({
+      title: '安排下一步',
+      summary: '这条建议带有待确认动作。',
+      reason: '主动检查自检。',
+      references: [],
+      proposal: { kind: 'create_todo', title: '自检行动', priority: 'medium', due: null },
+    }, directNow, { dedupeKey: 'self-test-actionable' });
+    updateSuggestion(actionableSuggestion.id, { status: 'acted' });
+    assert.equal(listSuggestions().find((item) => item.id === actionableSuggestion.id)?.status, 'acted');
+    updateSuggestion(actionableSuggestion.id, { status: 'dismissed' });
 
     store.setSettings({ agent: { apiBase: 'http://agent-self-test.invalid', apiKey: 'test-key', model: 'test-model' } });
     store.updateModule('todos', () => [{

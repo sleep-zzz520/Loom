@@ -1744,6 +1744,7 @@ textarea:focus-visible {
 }
 
 .agent-chat-area {
+  position: relative;
   display: flex;
   flex: 1;
   flex-direction: column;
@@ -1752,7 +1753,7 @@ textarea:focus-visible {
 }
 
 .session-menu-shell {
-  position: absolute;
+  position: fixed;
   z-index: 3;
   top: 16px;
   right: 28px;
@@ -1820,6 +1821,83 @@ textarea:focus-visible {
 
 .agent-session-menu .session-connection {
   flex: 0 0 auto;
+}
+
+.session-run-history {
+  flex: 0 0 auto;
+  margin-top: 9px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
+.session-run-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  min-height: 26px;
+  padding: 0 5px;
+  color: var(--text-3);
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  font-size: 10.5px;
+  transition: color var(--transition);
+}
+
+.session-run-trigger > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.session-run-trigger small {
+  color: inherit;
+  font-size: 9.5px;
+  font-weight: 500;
+}
+
+.session-run-trigger > svg {
+  transition: transform var(--transition);
+}
+
+.session-run-trigger:hover,
+.session-run-history.is-open .session-run-trigger {
+  color: var(--agent-accent);
+}
+
+.session-run-trigger:focus-visible {
+  outline: none;
+  color: var(--agent-accent);
+  box-shadow: 0 2px 0 rgba(61, 120, 231, 0.22);
+}
+
+.session-run-history.is-open .session-run-trigger > svg {
+  transform: rotate(180deg);
+}
+
+.session-run-list {
+  display: grid;
+  gap: 4px;
+  max-height: 208px;
+  margin-top: 6px;
+  padding: 1px 0 2px;
+  overflow-y: auto;
+}
+
+.session-run-entry {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 7px;
+  padding: 7px 7px 6px;
+  border: 1px solid rgba(32, 46, 66, 0.07);
+  border-radius: 7px;
+  background: rgba(249, 250, 252, 0.72);
+}
+
+.session-run-entry .agent-run-meta {
+  grid-column: 2;
 }
 
 .session-new {
@@ -6132,7 +6210,7 @@ button:disabled {
   align-items: flex-start;
   justify-content: space-between;
   gap: 16px;
-  padding: 0 2px 12px;
+  padding: 0 138px 12px 2px;
   border-bottom: 1px solid rgba(61, 120, 231, 0.12);
 }
 
@@ -6204,6 +6282,11 @@ button:disabled {
 .agent-suggestion.is-unread {
   border-color: rgba(61, 120, 231, 0.22);
   background: rgba(247, 250, 255, 0.92);
+}
+
+.agent-suggestion.is-acted {
+  border-color: rgba(52, 199, 89, 0.2);
+  background: rgba(249, 253, 250, 0.9);
 }
 
 .agent-suggestion-icon {
@@ -6287,8 +6370,64 @@ button:disabled {
   color: var(--agent-accent);
 }
 
+.agent-suggestion-actions .agent-suggestion-act {
+  color: var(--agent-accent);
+  font-weight: 600;
+}
+
 .agent-suggestion-actions .agent-suggestion-dismiss:hover:not(:disabled) {
   color: var(--danger);
+}
+
+.agent-run-status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #9aa5b4;
+}
+
+.agent-run-status-dot.is-running {
+  background: var(--agent-accent);
+  animation: agent-run-pulse 1.2s ease-in-out infinite;
+}
+
+.agent-run-status-dot.is-failed {
+  background: var(--danger);
+}
+
+.agent-run-copy {
+  min-width: 0;
+}
+
+.agent-run-copy strong,
+.agent-run-copy small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-run-copy strong {
+  color: var(--text-2);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.agent-run-copy small {
+  margin-top: 2px;
+  color: var(--text-3);
+  font-size: 10px;
+  line-height: 1.4;
+}
+
+.agent-run-meta {
+  color: var(--text-3);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+@keyframes agent-run-pulse {
+  50% { opacity: 0.35; }
 }
 
 .is-spinning {
@@ -6306,6 +6445,10 @@ button:disabled {
     padding: 0 0 14px;
   }
 
+  .agent-proactive-head {
+    padding-right: 126px;
+  }
+
   .agent-suggestion {
     grid-template-columns: auto minmax(0, 1fr);
   }
@@ -6314,10 +6457,15 @@ button:disabled {
     grid-column: 2;
     padding-top: 0;
   }
+
 }
 
 @media (prefers-reduced-motion: reduce) {
   .is-spinning {
+    animation: none;
+  }
+
+  .agent-run-status-dot.is-running {
     animation: none;
   }
 }
