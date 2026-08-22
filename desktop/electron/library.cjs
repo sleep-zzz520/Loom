@@ -18,6 +18,7 @@ const MIME_TYPES = {
 function init(userDataDir) {
   libraryDir = path.join(userDataDir, 'library-files');
   fs.mkdirSync(libraryDir, { recursive: true });
+  normalizeItemNames();
 }
 
 function mimeType(filePath) {
@@ -28,7 +29,35 @@ function list() {
   return store.getModule('profileItems');
 }
 
-function importFile(sourcePath) {
+function uniqueName(name, items) {
+  const original = String(name || '未命名资料').trim() || '未命名资料';
+  const extension = path.extname(original);
+  const stem = extension ? original.slice(0, -extension.length) : original;
+  const used = new Set(items.map((item) => String(item.name || '').toLocaleLowerCase()));
+  if (!used.has(original.toLocaleLowerCase())) return original;
+  let index = 1;
+  let candidate = `${stem} (${index})${extension}`;
+  while (used.has(candidate.toLocaleLowerCase())) {
+    index += 1;
+    candidate = `${stem} (${index})${extension}`;
+  }
+  return candidate;
+}
+
+function normalizeItemNames() {
+  store.updateModule('profileItems', (current) => {
+    const normalized = [];
+    let changed = false;
+    for (const item of current) {
+      const name = uniqueName(item.name, normalized);
+      if (name !== item.name) changed = true;
+      normalized.push(name === item.name ? item : { ...item, name });
+    }
+    return changed ? normalized : current;
+  });
+}
+
+function importFile(sourcePath, categoryId = '') {
   if (!libraryDir) throw new Error('资料库尚未初始化');
   const source = String(sourcePath || '');
   const stat = fs.statSync(source);
@@ -38,48 +67,56 @@ function importFile(sourcePath) {
   const originalName = path.basename(source);
   const storedName = `${id}${path.extname(originalName)}`;
   fs.copyFileSync(source, path.join(libraryDir, storedName));
-  const item = {
+  let item;
+  const items = store.updateModule('profileItems', (current) => {
+    item = {
     id,
-    name: originalName,
+    name: uniqueName(originalName, current),
     source: 'imported',
-    categoryId: '',
+    categoryId: String(categoryId || ''),
     storageName: storedName,
     mimeType: mimeType(originalName),
     size: stat.size,
     content: '',
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
-  };
-  const items = store.updateModule('profileItems', (current) => [item, ...current]);
+    };
+    return [item, ...current];
+  });
   return { items, item };
 }
 
-function createDocument() {
+function createDocument(categoryId = '') {
   const now = new Date().toISOString();
-  const item = {
+  let item;
+  const items = store.updateModule('profileItems', (current) => {
+    item = {
     id: store.newId(),
-    name: '未命名资料',
+    name: uniqueName('未命名资料', current),
     source: 'created',
-    categoryId: '',
+    categoryId: String(categoryId || ''),
     storageName: '',
     mimeType: 'text/markdown',
     size: 0,
     content: '',
     createdAt: now,
     updatedAt: now,
-  };
-  const items = store.updateModule('profileItems', (current) => [item, ...current]);
+    };
+    return [item, ...current];
+  });
   return { items, item };
 }
 
 function updateItem(id, patch = {}) {
   const items = store.updateModule('profileItems', (current) => current.map((item) => {
     if (item.id !== id || (item.source !== 'created' && item.source !== 'imported')) return item;
+    const others = current.filter((entry) => entry.id !== item.id);
     return {
       ...item,
-      name: String(patch.name ?? item.name).trim() || '未命名资料',
+      name: uniqueName(patch.name ?? item.name, others),
       categoryId: patch.categoryId === undefined ? item.categoryId : String(patch.categoryId),
       content: item.source === 'created' ? String(patch.content ?? item.content ?? '') : item.content,
+      note: patch.note === undefined ? String(item.note || '') : String(patch.note ?? ''),
       updatedAt: new Date().toISOString(),
     };
   }));
@@ -129,15 +166,25 @@ if (process.env.WORKBENCH_LIBRARY_SELF_TEST === '1') {
       throw new Error('file import failed');
     }
     if (!previewFile(imported.id).available) throw new Error('file preview failed');
+    const duplicateImport = importFile(source).item;
+    if (duplicateImport.name !== 'sample (1).pdf') {
+      throw new Error('duplicate import name failed');
+    }
     const document = createDocument().item;
     if (updateItem(document.id, { name: '自检文档', content: 'hello' }).item.content !== 'hello') {
       throw new Error('document update failed');
+    }
+    if (createDocument('general').item.categoryId !== 'general') {
+      throw new Error('document category assignment failed');
     }
     if (updateItem(document.id, { categoryId: 'general' }).item.categoryId !== 'general') {
       throw new Error('category update failed');
     }
     if (updateItem(imported.id, { name: '已重命名.pdf' }).item.name !== '已重命名.pdf') {
       throw new Error('file rename failed');
+    }
+    if (updateItem(duplicateImport.id, { name: '已重命名.pdf' }).item.name !== '已重命名 (1).pdf') {
+      throw new Error('duplicate rename failed');
     }
     removeItem(imported.id);
     if (fs.existsSync(path.join(libraryDir, imported.storageName))) {

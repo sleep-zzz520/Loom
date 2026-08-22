@@ -10,8 +10,8 @@ contextBridge.exposeInMainWorld('workbench', {
     setModule: (name, items) => ipcRenderer.invoke('data:set-module', name, items),
   },
   library: {
-    importFile: () => ipcRenderer.invoke('library:import-file'),
-    createDocument: () => ipcRenderer.invoke('library:create-document'),
+    importFile: (categoryId = '') => ipcRenderer.invoke('library:import-file', categoryId),
+    createDocument: (categoryId = '') => ipcRenderer.invoke('library:create-document', categoryId),
     updateItem: (id, patch) => ipcRenderer.invoke('library:update-item', id, patch),
     removeItem: (id) => ipcRenderer.invoke('library:remove-item', id),
     previewFile: (id) => ipcRenderer.invoke('library:preview-file', id),
@@ -23,6 +23,7 @@ contextBridge.exposeInMainWorld('workbench', {
       create: (input) => ipcRenderer.invoke('workspace:create-todo', input),
       update: (id, patch) => ipcRenderer.invoke('workspace:update-todo', id, patch),
       remove: (id) => ipcRenderer.invoke('workspace:remove-todo', id),
+      rememberPersonalDate: (id) => ipcRenderer.invoke('workspace:remember-personal-date', id),
     },
     notes: {
       list: () => ipcRenderer.invoke('workspace:list-notes'),
@@ -34,7 +35,28 @@ contextBridge.exposeInMainWorld('workbench', {
     getHolidays: (year) => ipcRenderer.invoke('calendar:get-holidays', year),
   },
   agent: {
-    chat: (messages) => ipcRenderer.invoke('agent:chat', messages),
+    status: () => ipcRenderer.invoke('agent:status'),
+    chat: (messages, onDelta) => {
+      const listener = (_event, delta) => onDelta?.(delta);
+      ipcRenderer.on('agent:stream', listener);
+      return ipcRenderer.invoke('agent:chat', messages).finally(() => {
+        ipcRenderer.removeListener('agent:stream', listener);
+      });
+    },
+    confirmProposal: (proposal) => ipcRenderer.invoke('agent:confirm-proposal', proposal),
+    getSuggestions: () => ipcRenderer.invoke('agent:get-suggestions'),
+    updateSuggestion: (id, patch) => ipcRenderer.invoke('agent:update-suggestion', id, patch),
+    checkProactive: (force = false) => ipcRenderer.invoke('agent:check-proactive', force),
+    onProactiveUpdated: (callback) => {
+      const listener = () => callback?.();
+      ipcRenderer.on('agent:proactive-updated', listener);
+      return () => ipcRenderer.removeListener('agent:proactive-updated', listener);
+    },
+    onOpenAgent: (callback) => {
+      const listener = () => callback?.();
+      ipcRenderer.on('agent:open', listener);
+      return () => ipcRenderer.removeListener('agent:open', listener);
+    },
   },
   notify: {
     checkTodos: () => ipcRenderer.invoke('notify:check-todos'),

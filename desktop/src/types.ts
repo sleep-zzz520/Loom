@@ -9,7 +9,11 @@ export interface Todo {
   due: string | null;
   done: boolean;
   repeat: 'none' | 'daily' | 'weekly' | 'monthly' | 'yearly';
+  repeatUntil: string | null;
   color: string | null;
+  personalDateId: string | null;
+  recurrenceId: string | null;
+  occurrenceSourceId?: string;
   createdAt: string;
 }
 
@@ -18,6 +22,20 @@ export interface Note {
   title: string;
   content: string;
   updatedAt: string;
+}
+
+export interface ImportantDate {
+  id: string;
+  title: string;
+  date: string;
+}
+
+export interface NotificationHistoryItem {
+  id: string;
+  eventKey: string;
+  title: string;
+  body: string;
+  sentAt: string;
 }
 
 export type LibrarySource = 'imported' | 'created';
@@ -31,6 +49,7 @@ export interface ProfileItem {
   mimeType: string;
   size: number;
   content: string;
+  note?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -41,7 +60,16 @@ export interface Category {
 }
 
 export interface AppSettings {
-  profile: { name: string; about: string; preferences: string[] };
+  profile: {
+    name: string;
+    nickname: string;
+    role: string;
+    about: string;
+    currentFocus: string;
+    responseLength: 'concise' | 'balanced' | 'detailed';
+    confirmationMode: 'mutations-only' | 'always-explain';
+    preferences: string[];
+  };
   email: {
     host: string;
     port: number;
@@ -53,7 +81,16 @@ export interface AppSettings {
     smtpSecure: boolean;
   };
   netease: { apiBase: string };
-  notify: { ntfyUrl: string; ntfyTopic: string; barkUrl: string; channel: 'ntfy' | 'bark' | 'none' };
+  notify: {
+    ntfyUrl: string;
+    ntfyTopic: string;
+    barkUrl: string;
+    channel: 'ntfy' | 'bark' | 'none';
+    reminderMinutes: number[];
+    quietHours: { start: string; end: string };
+    maxDailyNotifications: number;
+    importantDates: ImportantDate[];
+  };
   agent: { apiBase: string; apiKey: string; model: string };
   sync: { url: string; token: string };
 }
@@ -65,6 +102,10 @@ export interface WorkbenchData {
   modules: {
     todos: Todo[];
     notes: Note[];
+    agent: AgentConversationStore;
+    agentRuns: AgentRun[];
+    agentSuggestions: AgentSuggestion[];
+    notificationHistory: NotificationHistoryItem[];
     profileItems: ProfileItem[];
     categories: Category[];
   };
@@ -81,6 +122,72 @@ export interface WorkspaceSnapshot {
 export interface ChatMessage {
   role: 'user' | 'assistant';
   content: string;
+  attachments?: ChatAttachment[];
+}
+
+export interface ChatAttachment {
+  id: string;
+  name: string;
+  content: string;
+}
+
+export interface AgentConversation {
+  id: string;
+  title: string;
+  messages: ChatMessage[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AgentConversationStore {
+  activeId: string;
+  conversations: AgentConversation[];
+}
+
+export type AgentTrigger = 'daily-briefing' | 'event-follow-up';
+export type AgentRunStatus = 'running' | 'completed' | 'failed';
+export type AgentSuggestionStatus = 'unread' | 'read' | 'dismissed';
+
+export interface AgentSuggestionReference {
+  type: 'todo' | 'schedule' | 'note' | 'library';
+  id: string;
+  label: string;
+}
+
+export interface AgentSuggestion {
+  id: string;
+  dedupeKey: string;
+  trigger: AgentTrigger;
+  title: string;
+  summary: string;
+  reason: string;
+  references: AgentSuggestionReference[];
+  status: AgentSuggestionStatus;
+  createdAt: string;
+  updatedAt: string;
+  notifiedAt: string | null;
+}
+
+export interface AgentRun {
+  id: string;
+  trigger: AgentTrigger;
+  dateKey: string;
+  sourceKey?: string;
+  status: AgentRunStatus;
+  startedAt: string;
+  finishedAt: string | null;
+  suggestionId: string | null;
+  error?: string;
+}
+
+export type AgentProposal =
+  | { kind: 'create_todo'; title: string; priority: Priority; due: string | null }
+  | { kind: 'create_note'; title: string; content: string }
+  | { kind: 'save_important_date'; title: string; date: string };
+
+export interface AgentReply {
+  content: string;
+  proposal?: AgentProposal;
 }
 
 export interface WorkbenchApi {
@@ -98,9 +205,9 @@ export interface WorkbenchApi {
     ) => Promise<WorkbenchData['modules'][K]>;
   };
   library: {
-    importFile: () => Promise<{ items: ProfileItem[]; item: ProfileItem } | null>;
-    createDocument: () => Promise<{ items: ProfileItem[]; item: ProfileItem }>;
-    updateItem: (id: string, patch: Partial<Pick<ProfileItem, 'name' | 'content' | 'categoryId'>>) => Promise<{ items: ProfileItem[]; item: ProfileItem }>;
+    importFile: (categoryId?: string) => Promise<{ items: ProfileItem[]; item: ProfileItem } | null>;
+    createDocument: (categoryId?: string) => Promise<{ items: ProfileItem[]; item: ProfileItem }>;
+    updateItem: (id: string, patch: Partial<Pick<ProfileItem, 'name' | 'content' | 'categoryId' | 'note'>>) => Promise<{ items: ProfileItem[]; item: ProfileItem }>;
     removeItem: (id: string) => Promise<ProfileItem[]>;
     previewFile: (id: string) => Promise<{ available: boolean; reason?: string; mimeType?: string; data?: string }>;
   };
@@ -116,9 +223,11 @@ export interface WorkbenchApi {
         end?: string | null;
         color?: string | null;
         repeat?: Todo['repeat'];
+        repeatUntil?: string | null;
       }) => Promise<Todo[]>;
       update: (id: string, patch: Partial<Todo>) => Promise<Todo[]>;
       remove: (id: string) => Promise<Todo[]>;
+      rememberPersonalDate: (id: string) => Promise<{ todos: Todo[]; personalDate: ImportantDate }>;
     };
     notes: {
       list: () => Promise<Note[]>;
@@ -130,7 +239,14 @@ export interface WorkbenchApi {
     getHolidays: (year: number) => Promise<Record<string, { name: string; isOffDay: boolean }>>;
   };
   agent: {
-    chat: (messages: ChatMessage[]) => Promise<string>;
+    status: () => Promise<boolean>;
+    chat: (messages: ChatMessage[], onDelta?: (delta: string) => void) => Promise<AgentReply>;
+    confirmProposal: (proposal: AgentProposal) => Promise<{ content: string }>;
+    getSuggestions: () => Promise<AgentSuggestion[]>;
+    updateSuggestion: (id: string, patch: { status: AgentSuggestionStatus }) => Promise<AgentSuggestion[]>;
+    checkProactive: (force?: boolean) => Promise<AgentSuggestion[]>;
+    onProactiveUpdated: (callback: () => void) => () => void;
+    onOpenAgent: (callback: () => void) => () => void;
   };
   notify: {
     checkTodos: () => Promise<void>;

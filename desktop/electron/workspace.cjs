@@ -23,6 +23,11 @@ function createTodo(input = {}) {
   if (!title) {
     throw new Error('待办标题不能为空');
   }
+  const repeat = REPEAT_TYPES.includes(input.repeat) ? input.repeat : 'none';
+  const repeatUntil = normaliseRepeatUntil(input.repeatUntil);
+  if (repeatUntil && input.due && dateKey(input.due) > repeatUntil) {
+    throw new Error('重复截止日期不能早于首次日期');
+  }
   const todo = {
     id: store.newId(),
     title,
@@ -31,40 +36,61 @@ function createTodo(input = {}) {
     end: input.end || null,
     due: input.due || null,
     done: Boolean(input.done),
-    repeat: REPEAT_TYPES.includes(input.repeat) ? input.repeat : 'none',
+    repeat,
+    repeatUntil: repeat === 'none' ? null : repeatUntil,
     color: input.color || null,
+    personalDateId: input.personalDateId || null,
+    recurrenceId: null,
     createdAt: new Date().toISOString(),
   };
   return store.updateModule('todos', (items) => [todo, ...items]);
 }
 
 function updateTodo(id, patch = {}) {
-  return store.updateModule('todos', (items) =>
-    items.map((todo) => {
-      if (todo.id !== id) return todo;
-      const updated = { ...todo, ...patch };
-      // 标记完成时，如果设置了循环，自动创建下一次待办
-      if (patch.done === true && todo.repeat && todo.repeat !== 'none' && todo.due) {
-        const nextDue = calcNextDue(todo.due, todo.repeat);
-        if (nextDue) {
-          const next = {
-            id: store.newId(),
-            title: todo.title,
-            priority: todo.priority,
-            start: null,
-            end: null,
-            due: nextDue,
-            done: false,
-            repeat: todo.repeat,
-            color: null,
-            createdAt: new Date().toISOString(),
-          };
-          return [next, ...items.map((item) => (item.id === id ? updated : item))];
-        }
+  return store.updateModule('todos', (items) => {
+    const current = items.find((todo) => todo.id === id);
+    if (!current) return items;
+    const recurrenceId = current.recurrenceId || (current.repeat !== 'none' ? current.id : null);
+    const repeatUntil = patch.repeatUntil === undefined ? current.repeatUntil : normaliseRepeatUntil(patch.repeatUntil);
+    const updated = {
+      ...current,
+      ...patch,
+      repeatUntil: (patch.repeat ?? current.repeat) === 'none' ? null : repeatUntil,
+      recurrenceId,
+    };
+    if (updated.repeatUntil && updated.due && dateKey(updated.due) > updated.repeatUntil) {
+      throw new Error('重复截止日期不能早于首次日期');
+    }
+    // 循环任务只维护一条当前记录；完成后推进到下一次，避免物化出无限待办。
+    if (patch.done === true && !current.done && updated.repeat !== 'none' && updated.due) {
+      const nextDue = calcNextDue(updated.due, updated.repeat);
+      if (nextDue && (!updated.repeatUntil || dateKey(nextDue) <= updated.repeatUntil)) {
+        return items.map((item) => (item.id === id ? {
+          ...updated,
+          start: updated.start ? calcNextDue(updated.start, updated.repeat) : null,
+          end: updated.end ? calcNextDue(updated.end, updated.repeat) : null,
+          due: nextDue,
+          done: false,
+        } : item));
       }
-      return updated;
-    })
-  );
+    }
+    return items.map((item) => (item.id === id ? updated : item));
+  });
+}
+
+function dateKey(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+}
+
+function normaliseRepeatUntil(value) {
+  const date = String(value || '');
+  if (!date) return null;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || Number.isNaN(new Date(`${date}T00:00`).getTime())) {
+    throw new Error('重复截止日期无效');
+  }
+  return date;
 }
 
 function calcNextDue(due, repeat) {
@@ -82,6 +108,38 @@ function calcNextDue(due, repeat) {
 
 function removeTodo(id) {
   return store.updateModule('todos', (items) => items.filter((todo) => todo.id !== id));
+}
+
+function monthDay(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  return `${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+}
+
+/** 将确认后的每年日历记录关联为 Agent 的个人重要日期。 */
+function rememberPersonalDate(todoId) {
+  const todo = store.getModule('todos').find((item) => item.id === todoId);
+  if (!todo || todo.repeat !== 'yearly' || !todo.due) {
+    throw new Error('只有带日期的每年重复日历记录才能记为个人日期');
+  }
+  const date = monthDay(todo.due);
+  if (!date) throw new Error('日历日期无效');
+  const settings = store.getSettings();
+  const dates = Array.isArray(settings.notify?.importantDates) ? settings.notify.importantDates : [];
+  const personalDate = dates.find((item) => item.title === todo.title && item.date === date)
+    || { id: store.newId(), title: todo.title, date };
+  if (!dates.some((item) => item.id === personalDate.id)) {
+    store.setSettings({ notify: { importantDates: [...dates, personalDate] } });
+  }
+  const recurrenceId = todo.recurrenceId || todo.id;
+  const todos = store.updateModule('todos', (items) => {
+    return items.map((item) =>
+      item.id === todo.id || item.recurrenceId === recurrenceId
+        ? { ...item, recurrenceId, personalDateId: personalDate.id }
+        : item
+    );
+  });
+  return { todos, personalDate };
 }
 
 function listNotes() {
@@ -115,6 +173,7 @@ const workspace = {
   createTodo,
   updateTodo,
   removeTodo,
+  rememberPersonalDate,
   listNotes,
   saveNote,
   removeNote,
@@ -135,6 +194,22 @@ if (process.env.WORKBENCH_SELF_TEST === '1') {
     const updated = workspace.updateTodo(todos[0].id, { done: true });
     if (!updated[0].done) {
       throw new Error('todo update failed');
+    }
+    const yearly = workspace.createTodo({ title: '自检生日', due: '2026-05-20T09:00:00', repeat: 'yearly' })[0];
+    const remembered = workspace.rememberPersonalDate(yearly.id);
+    if (remembered.personalDate.date !== '05-20' || !remembered.todos.find((todo) => todo.id === yearly.id)?.personalDateId) {
+      throw new Error('personal date remember failed');
+    }
+    const repeated = workspace.updateTodo(yearly.id, { done: true });
+    if (repeated.some(Array.isArray) || repeated.length !== 2 || repeated.find((todo) => todo.id === yearly.id)?.done || new Date(repeated.find((todo) => todo.id === yearly.id).due).getFullYear() !== 2027) {
+      throw new Error('yearly todo repeat failed');
+    }
+    const daily = workspace.createTodo({ title: '每日学习', due: '2026-05-20T09:00:00', repeat: 'daily', repeatUntil: '2026-05-22' })[0];
+    const dayTwo = workspace.updateTodo(daily.id, { done: true }).find((todo) => todo.id === daily.id);
+    const dayThree = workspace.updateTodo(daily.id, { done: true }).find((todo) => todo.id === daily.id);
+    const finalDay = workspace.updateTodo(daily.id, { done: true }).find((todo) => todo.id === daily.id);
+    if (dateKey(dayTwo.due) !== '2026-05-21' || dateKey(dayThree.due) !== '2026-05-22' || !finalDay.done || store.getModule('todos').filter((todo) => todo.title === '每日学习').length !== 1) {
+      throw new Error('repeat-until self-test failed');
     }
     const notes = workspace.saveNote({ title: '自检笔记', content: 'hello' });
     if (notes.length !== 1 || notes[0].content !== 'hello') {
@@ -166,8 +241,29 @@ if (process.env.WORKBENCH_SELF_TEST === '1') {
       throw new Error('profile item save failed');
     }
     const snap = workspace.snapshot();
-    if (snap.todos.length !== 1 || snap.notes.length !== 0 || snap.categories.length !== 1) {
+    if (snap.todos.length !== 3 || snap.notes.length !== 0 || snap.categories.length !== 1 || snap.settings.notify.importantDates.length !== 1) {
       throw new Error('snapshot failed');
+    }
+    const legacyBirthday = {
+      id: 'legacy-birthday',
+      title: '我的生日',
+      priority: 'medium',
+      start: '2026-05-20T09:00:00',
+      end: null,
+      due: '2026-05-20T09:00:00',
+      done: false,
+      repeat: 'yearly',
+      repeatUntil: null,
+      color: null,
+      personalDateId: null,
+      recurrenceId: null,
+      createdAt: new Date().toISOString(),
+    };
+    store.setModule('todos', [legacyBirthday]);
+    const migrated = workspace.rememberPersonalDate(legacyBirthday.id);
+    const nextBirthday = workspace.updateTodo(legacyBirthday.id, { done: true }).find((todo) => todo.id === legacyBirthday.id);
+    if (!nextBirthday || new Date(nextBirthday.due).getFullYear() !== 2027 || nextBirthday.done || store.getModule('todos').length !== 1 || !nextBirthday.personalDateId || migrated.personalDate.date !== '05-20') {
+      throw new Error('legacy yearly birthday migration failed');
     }
     console.log('workspace self-test ok');
   } finally {

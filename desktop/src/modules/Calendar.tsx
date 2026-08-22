@@ -1,8 +1,10 @@
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Check, ChevronLeft, ChevronRight, Plus, Repeat, Trash2, X } from 'lucide-react';
+import { CalendarDays, Check, ChevronDown, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, Plus, Repeat, Sparkles, Trash2, X } from 'lucide-react';
 import type { Priority, Todo } from '../types';
+import { DateField } from '../components/DateFields';
 
 const WEEKDAYS = ['日', '一', '二', '三', '四', '五', '六'];
+const MONTHS = Array.from({ length: 12 }, (_, index) => `${index + 1}月`);
 const PRIORITY_LABEL: Record<Priority, string> = { high: '高', medium: '中', low: '低' };
 
 function dateKey(date: Date) {
@@ -70,6 +72,71 @@ function tomorrowAt(hour: number): string {
   return toDatetimeLocal(d, hour);
 }
 
+function isPersonalDateCandidate(todo: Todo): boolean {
+  return todo.repeat === 'yearly'
+    && !todo.personalDateId
+    && Boolean(todo.due)
+    && /(生日|纪念日)/.test(todo.title);
+}
+
+function recurringSources(todos: Todo[]): Todo[] {
+  const groups = new Map<string, Todo[]>();
+  for (const todo of todos) {
+    const key = todo.recurrenceId || todo.id;
+    groups.set(key, [...(groups.get(key) || []), todo]);
+  }
+  const now = Date.now();
+  return [...groups.values()].map((items) => {
+    const open = items.filter((todo) => !todo.done);
+    return open.filter((todo) => todo.due && new Date(todo.due).getTime() >= now)
+      .sort((a, b) => String(a.due).localeCompare(String(b.due)))[0]
+      || open.sort((a, b) => String(b.due).localeCompare(String(a.due)))[0]
+      || items[0];
+  });
+}
+
+function occursOn(todo: Todo, key: string): boolean {
+  const source = todo.start || todo.due;
+  if (!source) return false;
+  const sourceDate = new Date(source);
+  const sourceKey = dateKey(sourceDate);
+  if (key < sourceKey || (todo.repeatUntil && key > todo.repeatUntil)) return false;
+  if (todo.repeat === 'none') return key === sourceKey;
+  const target = new Date(`${key}T00:00`);
+  const sourceDay = new Date(`${sourceKey}T00:00`);
+  const days = Math.round((target.getTime() - sourceDay.getTime()) / 86_400_000);
+  if (todo.repeat === 'daily') return days >= 0;
+  if (todo.repeat === 'weekly') return days >= 0 && days % 7 === 0;
+  if (todo.repeat === 'monthly') {
+    const months = (target.getFullYear() - sourceDay.getFullYear()) * 12 + target.getMonth() - sourceDay.getMonth();
+    return months >= 0 && target.getDate() === sourceDay.getDate();
+  }
+  return target.getMonth() === sourceDay.getMonth() && target.getDate() === sourceDay.getDate();
+}
+
+function dateAtOccurrence(value: string | null, key: string): string | null {
+  if (!value) return null;
+  const original = new Date(value);
+  const [year, month, day] = key.split('-').map(Number);
+  return new Date(year, month - 1, day, original.getHours(), original.getMinutes(), original.getSeconds()).toISOString();
+}
+
+function occurrencesOn(todos: Todo[], key: string): Todo[] {
+  return todos.flatMap((todo) => {
+    if (!occursOn(todo, key)) return [];
+    const sourceKey = dateKey(new Date(todo.start || todo.due!));
+    if (sourceKey === key) return [todo];
+    return [{
+      ...todo,
+      id: `${todo.id}@${key}`,
+      start: dateAtOccurrence(todo.start, key),
+      end: dateAtOccurrence(todo.end, key),
+      due: dateAtOccurrence(todo.due, key),
+      occurrenceSourceId: todo.id,
+    }];
+  });
+}
+
 export default function Calendar() {
   const [todos, setTodos] = useState<Todo[]>([]);
   const [holidays, setHolidays] = useState<Record<string, string>>({});
@@ -82,10 +149,16 @@ export default function Calendar() {
   const [formStart, setFormStart] = useState('');
   const [formPriority, setFormPriority] = useState<Priority>('medium');
   const [formRepeat, setFormRepeat] = useState<Todo['repeat']>('none');
+  const [formRepeatUntil, setFormRepeatUntil] = useState('');
+  const [monthPickerOpen, setMonthPickerOpen] = useState(false);
+  const [pickerYear, setPickerYear] = useState(cursor.year);
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [personalDateCandidate, setPersonalDateCandidate] = useState<Todo | null>(null);
+  const [rememberingDate, setRememberingDate] = useState(false);
   const [error, setError] = useState('');
   const titleRef = useRef<HTMLInputElement>(null);
   const gridRef = useRef<HTMLDivElement>(null);
+  const dismissedCandidateIds = useRef(new Set<string>());
 
   async function load() {
     const list = await window.workbench.workspace.todos.list().catch(() => []);
@@ -93,6 +166,18 @@ export default function Calendar() {
   }
 
   useEffect(() => { load(); }, []);
+
+  // 兼容在此功能上线前创建的每年生日/纪念日：打开对应日期时仍会给出一次确认。
+  useEffect(() => {
+    if (personalDateCandidate) return;
+    const candidate = todos.find((todo) => {
+      const todoDate = todo.start || todo.due;
+      return todoDate && dateKey(new Date(todoDate)) === selected
+        && isPersonalDateCandidate(todo)
+        && !dismissedCandidateIds.current.has(todo.id);
+    });
+    if (candidate) setPersonalDateCandidate(candidate);
+  }, [todos, selected, personalDateCandidate]);
 
   /** 获取节假日 */
   useEffect(() => {
@@ -136,13 +221,31 @@ export default function Calendar() {
 
   function shiftMonth(delta: number) {
     const next = new Date(cursor.year, cursor.month + delta, 1);
-    setCursor({ year: next.getFullYear(), month: next.getMonth() });
+    moveToMonth(next.getFullYear(), next.getMonth());
+  }
+
+  function moveToMonth(year: number, month: number) {
+    setCursor({ year, month });
     const selectedDate = new Date(`${selected}T00:00`);
     const day = Math.min(
       selectedDate.getDate(),
-      new Date(next.getFullYear(), next.getMonth() + 1, 0).getDate()
+      new Date(year, month + 1, 0).getDate()
     );
-    selectDate(dateKey(new Date(next.getFullYear(), next.getMonth(), day)));
+    selectDate(dateKey(new Date(year, month, day)));
+  }
+
+  function toggleMonthPicker() {
+    if (monthPickerOpen) {
+      setMonthPickerOpen(false);
+      return;
+    }
+    setPickerYear(cursor.year);
+    setMonthPickerOpen(true);
+  }
+
+  function pickMonth(month: number) {
+    moveToMonth(pickerYear, month);
+    setMonthPickerOpen(false);
   }
 
   function goToday() {
@@ -159,17 +262,36 @@ export default function Calendar() {
     setFormStart(toDatetimeLocal(new Date(`${selected}T09:00`), 9, 0));
     setFormPriority('medium');
     setFormRepeat('none');
+    setFormRepeatUntil('');
     setEditingId(null);
     setError('');
   }
 
+  function setRepeatEnd(days: number) {
+    const start = new Date(formStart || `${selected}T09:00`);
+    if (Number.isNaN(start.getTime())) return;
+    start.setDate(start.getDate() + days);
+    setFormRepeatUntil(dateKey(start));
+  }
+
+  function setRepeatEndByMonths(months: number) {
+    const start = new Date(formStart || `${selected}T09:00`);
+    if (Number.isNaN(start.getTime())) return;
+    start.setMonth(start.getMonth() + months);
+    setFormRepeatUntil(dateKey(start));
+  }
+
   /** 编辑已有待办 */
   function startEdit(todo: Todo) {
-    setEditingId(todo.id);
+    const sourceId = todo.occurrenceSourceId || todo.id;
+    dismissedCandidateIds.current.add(sourceId);
+    setPersonalDateCandidate(null);
+    setEditingId(sourceId);
     setFormTitle(todo.title);
     setFormStart(todo.start || todo.due ? toDatetimeLocal(new Date(todo.start || todo.due!), 9, 0) : '');
     setFormPriority(todo.priority);
     setFormRepeat(todo.repeat);
+    setFormRepeatUntil(todo.repeatUntil || '');
     setTimeout(() => titleRef.current?.focus(), 100);
   }
 
@@ -177,26 +299,30 @@ export default function Calendar() {
     event.preventDefault();
     if (!formTitle.trim()) return;
     try {
-      if (editingId) {
-        // 更新
-        const next = await window.workbench.workspace.todos.update(editingId, {
+      const savedId = editingId;
+      const next = savedId
+        ? await window.workbench.workspace.todos.update(savedId, {
           title: formTitle.trim(),
           priority: formPriority,
           start: formStart || null,
           due: formStart || `${selected}T23:59`,
           repeat: formRepeat,
-        });
-        setTodos(next);
-      } else {
-        // 新建
-        const next = await window.workbench.workspace.todos.create({
+          repeatUntil: formRepeat === 'none' ? null : formRepeatUntil || null,
+        })
+        : await window.workbench.workspace.todos.create({
           title: formTitle.trim(),
           priority: formPriority,
           start: formStart || null,
           due: formStart || `${selected}T23:59`,
           repeat: formRepeat,
+          repeatUntil: formRepeat === 'none' ? null : formRepeatUntil || null,
         });
-        setTodos(next);
+      const saved = savedId ? next.find((todo) => todo.id === savedId) : next[0];
+      setTodos(next);
+      if (saved && isPersonalDateCandidate(saved)) {
+        setPersonalDateCandidate(saved);
+      } else if (savedId === personalDateCandidate?.id) {
+        setPersonalDateCandidate(null);
       }
       resetForm();
     } catch (err) {
@@ -204,8 +330,31 @@ export default function Calendar() {
     }
   }
 
+  async function rememberPersonalDate() {
+    if (!personalDateCandidate || rememberingDate) return;
+    setRememberingDate(true);
+    setError('');
+    try {
+      const result = await window.workbench.workspace.todos.rememberPersonalDate(personalDateCandidate.id);
+      setTodos(result.todos);
+      setPersonalDateCandidate(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '保存个人日期失败');
+    } finally {
+      setRememberingDate(false);
+    }
+  }
+
+  function dismissPersonalDateCandidate() {
+    if (personalDateCandidate) dismissedCandidateIds.current.add(personalDateCandidate.id);
+    setPersonalDateCandidate(null);
+  }
+
   async function toggleTodo(todo: Todo) {
-    const next = await window.workbench.workspace.todos.update(todo.id, { done: !todo.done });
+    const next = await window.workbench.workspace.todos.update(todo.occurrenceSourceId || todo.id, {
+      done: !todo.done,
+      ...(todo.occurrenceSourceId ? { start: todo.start, end: todo.end, due: todo.due } : {}),
+    });
     setTodos(next);
   }
 
@@ -252,14 +401,11 @@ export default function Calendar() {
   }, [cursor]);
 
   /** 选中日期的待办 */
+  const calendarTodos = useMemo(() => recurringSources(todos), [todos]);
   const dayTodos = useMemo(() =>
-    todos
-      .filter((todo) => {
-        const key = todo.start ? dateKey(new Date(todo.start)) : todo.due ? dateKey(new Date(todo.due)) : null;
-        return key === selected;
-      })
+    occurrencesOn(calendarTodos, selected)
       .sort((a, b) => (a.start || a.due || '').localeCompare(b.start || b.due || '')),
-    [todos, selected]
+    [calendarTodos, selected]
   );
 
   return (
@@ -267,16 +413,56 @@ export default function Calendar() {
       <div className="calendar-layout">
         <div className="calendar-panel">
           <div className="calendar-panel-toolbar">
-            <div className="calendar-head">
+            <div className="calendar-navigation" aria-label="日历导航">
+              <button type="button" className="icon-btn" aria-label="上一年" onClick={() => moveToMonth(cursor.year - 1, cursor.month)}>
+                <ChevronsLeft size={17} />
+              </button>
               <button type="button" className="icon-btn" aria-label="上一月" onClick={() => shiftMonth(-1)}>
                 <ChevronLeft size={18} />
               </button>
-              <button type="button" className="text-btn" onClick={goToday}>
-                {cursor.year} 年 {cursor.month + 1} 月
+              <button
+                type="button"
+                className="calendar-month-trigger"
+                aria-haspopup="dialog"
+                aria-expanded={monthPickerOpen}
+                onClick={toggleMonthPicker}
+              >
+                <CalendarDays size={15} />
+                {cursor.year}年 {cursor.month + 1}月
+                <ChevronDown size={14} />
               </button>
               <button type="button" className="icon-btn" aria-label="下一月" onClick={() => shiftMonth(1)}>
                 <ChevronRight size={18} />
               </button>
+              <button type="button" className="icon-btn" aria-label="下一年" onClick={() => moveToMonth(cursor.year + 1, cursor.month)}>
+                <ChevronsRight size={17} />
+              </button>
+              <button type="button" className="calendar-today-btn" onClick={goToday}>今天</button>
+              {monthPickerOpen && (
+                <div className="calendar-month-popover" role="dialog" aria-label="选择年月">
+                  <div className="calendar-month-popover-head">
+                    <button type="button" className="icon-btn" aria-label="上一年" onClick={() => setPickerYear((year) => year - 1)}>
+                      <ChevronLeft size={16} />
+                    </button>
+                    <strong>{pickerYear}年</strong>
+                    <button type="button" className="icon-btn" aria-label="下一年" onClick={() => setPickerYear((year) => year + 1)}>
+                      <ChevronRight size={16} />
+                    </button>
+                  </div>
+                  <div className="calendar-month-options">
+                    {MONTHS.map((label, month) => (
+                      <button
+                        key={label}
+                        type="button"
+                        className={`calendar-month-option${pickerYear === cursor.year && month === cursor.month ? ' selected' : ''}`}
+                        onClick={() => pickMonth(month)}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           </div>
           <div className="calendar-weekdays">
@@ -284,10 +470,7 @@ export default function Calendar() {
           </div>
           <div className="calendar-grid" ref={gridRef} tabIndex={0} onKeyDown={handleKeyDown}>
             {cells.map((cell) => {
-              const dayTodos = todos.filter((todo) => {
-                const key = todo.start ? dateKey(new Date(todo.start)) : todo.due ? dateKey(new Date(todo.due)) : null;
-                return key === cell.key;
-              });
+              const dayTodos = occurrencesOn(calendarTodos, cell.key);
               const hasOverdue = dayTodos.some((t) => isOverdue(t));
               const count = dayTodos.length;
               const activeTodos = dayTodos.filter((todo) => !todo.done);
@@ -334,7 +517,7 @@ export default function Calendar() {
               </label>
               <label className="field">
                 <span>日期 / 时间</span>
-                <input type="datetime-local" value={formStart} onChange={(e) => setFormStart(e.target.value)} />
+                <DateField mode="datetime" value={formStart} onChange={setFormStart} ariaLabel="选择日期和时间" placeholder="选择日期和时间" />
               </label>
               <div className="quick-time">
                 <button type="button" className="chip" onClick={() => setFormStart(todayAt(20))}>今晚 20:00</button>
@@ -361,6 +544,22 @@ export default function Calendar() {
                   </select>
                 </label>
               </div>
+              {formRepeat !== 'none' && (
+                <div className="repeat-until-field">
+                  <label className="field">
+                    <span>循环结束日期</span>
+                    <DateField mode="date" value={formRepeatUntil} onChange={setFormRepeatUntil} ariaLabel="选择循环结束日期" placeholder="持续循环" />
+                  </label>
+                  <div className="repeat-until-help">
+                    <span>留空则持续重复</span>
+                    <div>
+                      <button type="button" className="chip" onClick={() => setRepeatEnd(7)}>7 天后</button>
+                      <button type="button" className="chip" onClick={() => setRepeatEndByMonths(1)}>1 个月后</button>
+                      <button type="button" className="chip" onClick={() => setRepeatEndByMonths(3)}>3 个月后</button>
+                    </div>
+                  </div>
+                </div>
+              )}
               <div className="form-actions">
                 <button type="submit" className="btn-primary btn-small">
                   <Plus size={15} /> {editingId ? '保存修改' : '添加'}
@@ -372,6 +571,22 @@ export default function Calendar() {
                 )}
               </div>
             </form>
+
+            {personalDateCandidate && (
+              <aside className="personal-date-suggestion" aria-label="Agent 发现私人日期">
+                <span className="personal-date-suggestion-icon"><Sparkles size={15} /></span>
+                <div>
+                  <strong>Agent 发现了一条长期日期</strong>
+                  <p>“{personalDateCandidate.title}”会每年重复。确认后，Agent 会把它记为你的个人日期并在当天主动提醒。</p>
+                  <div>
+                    <button type="button" className="btn-primary btn-small" onClick={rememberPersonalDate} disabled={rememberingDate}>
+                      {rememberingDate ? '记忆中…' : '让 Agent 记住'}
+                    </button>
+                    <button type="button" className="text-btn" onClick={dismissPersonalDateCandidate} disabled={rememberingDate}>暂不</button>
+                  </div>
+                </div>
+              </aside>
+            )}
 
             {error && <p className="form-error">{error}</p>}
           </div>
@@ -385,7 +600,7 @@ export default function Calendar() {
                 const overdue = isOverdue(todo);
                 const dueSoon = isDueSoon(todo);
                 const hasTime = !!todo.start;
-                const isEditing = editingId === todo.id;
+                const isEditing = editingId === (todo.occurrenceSourceId || todo.id);
                 return (
                   <div
                     key={todo.id}
@@ -415,7 +630,7 @@ export default function Calendar() {
                     {todo.repeat !== 'none' && <Repeat size={12} strokeWidth={1.8} className="repeat-icon" />}
                     {overdue && <span className="badge badge-overdue">{relativeTime(todo.due!)}</span>}
                     {dueSoon && !overdue && <span className="badge badge-due-soon">{relativeTime(todo.due!)}</span>}
-                    <button type="button" className="icon-btn" aria-label="删除" onClick={(e) => { e.stopPropagation(); removeTodo(todo.id); }}>
+                    <button type="button" className="icon-btn" aria-label="删除" onClick={(e) => { e.stopPropagation(); removeTodo(todo.occurrenceSourceId || todo.id); }}>
                       <Trash2 size={15} />
                     </button>
                   </div>

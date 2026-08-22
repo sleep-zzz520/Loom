@@ -7,7 +7,16 @@ let dataFile = '';
 const DEFAULT_DATA = {
   schemaVersion: 1,
   settings: {
-    profile: { name: '', about: '', preferences: [] },
+    profile: {
+      name: '',
+      nickname: '',
+      role: '',
+      about: '',
+      currentFocus: '',
+      responseLength: 'balanced',
+      confirmationMode: 'mutations-only',
+      preferences: [],
+    },
     email: {
       host: '',
       port: 993,
@@ -19,7 +28,16 @@ const DEFAULT_DATA = {
       smtpSecure: true,
     },
     netease: { apiBase: 'http://127.0.0.1:3000' },
-    notify: { ntfyUrl: 'https://ntfy.sh', ntfyTopic: '', barkUrl: '', channel: 'ntfy' },
+    notify: {
+      ntfyUrl: 'https://ntfy.sh',
+      ntfyTopic: '',
+      barkUrl: '',
+      channel: 'ntfy',
+      reminderMinutes: [1440, 240, 60],
+      quietHours: { start: '22:00', end: '08:00' },
+      maxDailyNotifications: 5,
+      importantDates: [],
+    },
     agent: { apiBase: '', apiKey: '', model: '' },
     sync: { url: '', token: '' },
   },
@@ -30,6 +48,19 @@ const DEFAULT_DATA = {
   modules: {
     todos: [],
     notes: [],
+    agent: {
+      activeId: 'default',
+      conversations: [{
+        id: 'default',
+        title: '新对话',
+        messages: [],
+        createdAt: '',
+        updatedAt: '',
+      }],
+    },
+    agentRuns: [],
+    agentSuggestions: [],
+    notificationHistory: [],
     profileItems: [],
     categories: [],
   },
@@ -68,10 +99,29 @@ function readData() {
   }
   try {
     const saved = JSON.parse(fs.readFileSync(dataFile, 'utf8'));
-    return mergeDeep(clone(DEFAULT_DATA), saved);
+    return normalizeAgentModule(mergeDeep(clone(DEFAULT_DATA), saved));
   } catch {
     return clone(DEFAULT_DATA);
   }
+}
+
+/** 将旧版唯一聊天记录迁移到会话集合，保留用户已有的 Agent 历史。 */
+function normalizeAgentModule(data) {
+  const agentModule = data.modules?.agent;
+  if (Array.isArray(agentModule)) {
+    const hasHistory = agentModule.length > 0;
+    data.modules.agent = {
+      activeId: hasHistory ? 'legacy' : 'default',
+      conversations: [{
+        id: hasHistory ? 'legacy' : 'default',
+        title: hasHistory ? '此前对话' : '新对话',
+        messages: agentModule,
+        createdAt: '',
+        updatedAt: '',
+      }],
+    };
+  }
+  return data;
 }
 
 function writeData(data) {
@@ -133,3 +183,22 @@ module.exports = {
   setModule,
   updateModule,
 };
+
+if (process.env.WORKBENCH_STORE_SELF_TEST === '1') {
+  const assert = require('node:assert/strict');
+  const os = require('node:os');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'workbench-store-self-test-'));
+  try {
+    fs.writeFileSync(path.join(dir, 'workbench-data.json'), JSON.stringify({
+      modules: { agent: [{ role: 'user', content: '保留这条旧消息' }] },
+    }), 'utf8');
+    init(dir);
+    const migrated = getModule('agent');
+    assert.equal(migrated.conversations.length, 1);
+    assert.equal(migrated.conversations[0].title, '此前对话');
+    assert.equal(migrated.conversations[0].messages[0].content, '保留这条旧消息');
+    console.log('store self-test ok');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}

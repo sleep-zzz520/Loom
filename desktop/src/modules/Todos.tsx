@@ -1,6 +1,7 @@
 import { FormEvent, useEffect, useState } from 'react';
-import { Check, Phone, Plus, RefreshCw, Repeat, RotateCcw, Trash2 } from 'lucide-react';
+import { CalendarClock, Check, Phone, Plus, RefreshCw, Repeat, RotateCcw, Trash2 } from 'lucide-react';
 import type { Priority, Todo } from '../types';
+import { DateField } from '../components/DateFields';
 
 const PRIORITY_LABEL: Record<Priority, string> = {
   high: '高',
@@ -54,6 +55,23 @@ function absoluteTime(due: string): string {
   return new Date(due).toLocaleString('zh-CN', { hour12: false });
 }
 
+function taskTime(due: string): string {
+  return new Intl.DateTimeFormat('zh-CN', {
+    month: 'long',
+    day: 'numeric',
+    weekday: 'short',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).format(new Date(due));
+}
+
+function repeatSummary(todo: Todo): string {
+  const label = REPEAT_LABEL[todo.repeat];
+  if (!todo.repeatUntil) return `${label}循环`;
+  return `${label} · 至 ${new Intl.DateTimeFormat('zh-CN', { year: 'numeric', month: 'short', day: 'numeric' }).format(new Date(`${todo.repeatUntil}T00:00`))}`;
+}
+
 function toDatetimeLocal(value: string | null): string {
   if (!value) return '';
   const date = new Date(value);
@@ -63,12 +81,31 @@ function toDatetimeLocal(value: string | null): string {
     .slice(0, 16);
 }
 
+function visibleTodos(todos: Todo[]): Todo[] {
+  const groups = new Map<string, Todo[]>();
+  for (const todo of todos) {
+    const key = todo.recurrenceId || todo.id;
+    groups.set(key, [...(groups.get(key) || []), todo]);
+  }
+  const now = Date.now();
+  return [...groups.values()].map((items) => {
+    if (items.length === 1) return items[0];
+    const open = items.filter((todo) => !todo.done);
+    return open
+      .filter((todo) => todo.due && new Date(todo.due).getTime() >= now)
+      .sort((a, b) => String(a.due).localeCompare(String(b.due)))[0]
+      || open.sort((a, b) => String(b.due).localeCompare(String(a.due)))[0]
+      || items.sort((a, b) => String(b.due).localeCompare(String(a.due)))[0];
+  });
+}
+
 export default function Todos() {
   const [todos, setTodos] = useState<Todo[]>([]);
   const [title, setTitle] = useState('');
   const [priority, setPriority] = useState<Priority>('medium');
   const [due, setDue] = useState('');
   const [repeat, setRepeat] = useState<Todo['repeat']>('none');
+  const [repeatUntil, setRepeatUntil] = useState('');
   const [editingId, setEditingId] = useState<string | null>(null);
   const [notifyMsg, setNotifyMsg] = useState('');
 
@@ -84,6 +121,7 @@ export default function Todos() {
     setPriority('medium');
     setDue('');
     setRepeat('none');
+    setRepeatUntil('');
     setEditingId(null);
   }
 
@@ -95,6 +133,7 @@ export default function Todos() {
       priority,
       due: due || null,
       repeat,
+      repeatUntil: repeat === 'none' ? null : repeatUntil || null,
     };
     const next = editingId
       ? await window.workbench.workspace.todos.update(editingId, input)
@@ -109,6 +148,7 @@ export default function Todos() {
     setPriority(todo.priority);
     setDue(toDatetimeLocal(todo.due));
     setRepeat(todo.repeat);
+    setRepeatUntil(todo.repeatUntil || '');
   }
 
   async function toggleDone(todo: Todo) {
@@ -145,13 +185,17 @@ export default function Todos() {
     setTimeout(() => setNotifyMsg(''), 3000);
   }
 
-  const sorted = [...todos].sort(
+  const sorted = visibleTodos(todos).sort(
     (a, b) =>
       Number(a.done) - Number(b.done) ||
       (isOverdue(a) ? -1 : isOverdue(b) ? 1 : 0) ||
       PRIORITY_RANK[a.priority] - PRIORITY_RANK[b.priority] ||
       String(a.due ?? '').localeCompare(String(b.due ?? ''))
   );
+  const openCount = sorted.filter((todo) => !todo.done).length;
+  const overdueCount = sorted.filter(isOverdue).length;
+  const todayKey = new Date().toDateString();
+  const dueTodayCount = sorted.filter((todo) => !todo.done && todo.due && new Date(todo.due).toDateString() === todayKey).length;
 
   return (
     <section className="module-page">
@@ -174,7 +218,7 @@ export default function Todos() {
         </label>
         <label className="field">
           <span>截止时间</span>
-          <input type="datetime-local" value={due} onChange={(event) => setDue(event.target.value)} />
+          <DateField mode="datetime" value={due} onChange={setDue} ariaLabel="选择截止时间" placeholder="选择截止时间" />
         </label>
         <label className="field">
           <span>重复</span>
@@ -186,6 +230,12 @@ export default function Todos() {
             <option value="yearly">每年</option>
           </select>
         </label>
+        {repeat !== 'none' && (
+          <label className="field">
+            <span>重复至（可选）</span>
+            <DateField mode="date" value={repeatUntil} onChange={setRepeatUntil} ariaLabel="选择循环结束日期" placeholder="持续循环" />
+          </label>
+        )}
         <button type="submit" className="btn-primary">
           {editingId ? <Check size={16} /> : <Plus size={16} />}
           {editingId ? '保存' : '添加'}
@@ -197,6 +247,16 @@ export default function Todos() {
       </form>
 
       <div className="todo-panel">
+        <div className="todo-list-header">
+          <div>
+            <h2>待办清单</h2>
+            <p>{openCount ? `当前有 ${openCount} 项待处理` : '所有待办均已完成'}</p>
+          </div>
+          <div className="todo-list-summary" aria-label="待办概览">
+            <span>{dueTodayCount} 项今天截止</span>
+            {overdueCount > 0 && <span className="is-overdue">{overdueCount} 项已超期</span>}
+          </div>
+        </div>
         {sorted.map((todo) => {
           const overdue = isOverdue(todo);
           const dueSoon = isDueSoon(todo);
@@ -225,16 +285,29 @@ export default function Todos() {
               >
                 {todo.done && <Check size={14} strokeWidth={3} />}
               </button>
-              <span className="todo-title">{todo.title}</span>
+              <div className="todo-main">
+                <span className="todo-title">{todo.title}</span>
+                <div className="todo-details">
+                  {todo.due ? (
+                    <span className="todo-detail" title={absoluteTime(todo.due)}>
+                      <CalendarClock size={13} strokeWidth={1.8} />
+                      截止 {taskTime(todo.due)}
+                    </span>
+                  ) : (
+                    <span className="todo-detail">未设置截止时间</span>
+                  )}
+                  {todo.repeat !== 'none' && (
+                    <span className="todo-detail" title={repeatSummary(todo)}>
+                      <Repeat size={13} strokeWidth={1.8} />
+                      {repeatSummary(todo)}
+                    </span>
+                  )}
+                </div>
+              </div>
               <div className="todo-info">
                 <span className={`priority priority-${todo.priority}`}>
                   {PRIORITY_LABEL[todo.priority]}
                 </span>
-                {todo.repeat && todo.repeat !== 'none' && (
-                  <span className="repeat-icon" title={REPEAT_LABEL[todo.repeat]}>
-                    <Repeat size={12} strokeWidth={1.8} />
-                  </span>
-                )}
                 {overdue && (
                   <span className="badge badge-overdue" title={absoluteTime(todo.due!)}>
                     {relativeTime(todo.due!)}

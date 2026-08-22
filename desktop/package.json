@@ -8,7 +8,12 @@
     "typecheck": "tsc --noEmit",
     "build": "tsc --noEmit && vite build",
     "start": "electron .",
-    "self-test": "cross-env WORKBENCH_SELF_TEST=1 node electron/workspace.cjs"
+    "self-test": "cross-env WORKBENCH_SELF_TEST=1 node electron/workspace.cjs",
+    "store-self-test": "cross-env WORKBENCH_STORE_SELF_TEST=1 node electron/store.cjs",
+    "notifier-self-test": "cross-env WORKBENCH_NOTIFIER_SELF_TEST=1 node electron/notifier.cjs",
+    "agent-self-test": "cross-env WORKBENCH_AGENT_SELF_TEST=1 node electron/agent.cjs",
+    "proactive-self-test": "cross-env WORKBENCH_PROACTIVE_SELF_TEST=1 node electron/proactive.cjs",
+    "test": "npm run build && npm run self-test && npm run store-self-test && npm run notifier-self-test && npm run agent-self-test && npm run proactive-self-test"
   },
   "dependencies": {
     "lucide-react": "^0.454.0",
