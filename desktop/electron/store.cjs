@@ -38,7 +38,7 @@ const DEFAULT_DATA = {
       maxDailyNotifications: 5,
       importantDates: [],
     },
-    agent: { apiBase: '', apiKey: '', model: '' },
+    agent: { apiBase: '', apiKey: '', model: '', proactiveEnabled: true },
     sync: { url: '', token: '' },
   },
   state: {
@@ -197,6 +197,7 @@ if (process.env.WORKBENCH_STORE_SELF_TEST === '1') {
     assert.equal(migrated.conversations.length, 1);
     assert.equal(migrated.conversations[0].title, '此前对话');
     assert.equal(migrated.conversations[0].messages[0].content, '保留这条旧消息');
+    assert.equal(getSettings().agent.proactiveEnabled, true);
     console.log('store self-test ok');
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });

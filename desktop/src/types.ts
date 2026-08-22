@@ -91,7 +91,7 @@ export interface AppSettings {
     maxDailyNotifications: number;
     importantDates: ImportantDate[];
   };
-  agent: { apiBase: string; apiKey: string; model: string };
+  agent: { apiBase: string; apiKey: string; model: string; proactiveEnabled: boolean };
   sync: { url: string; token: string };
 }
 
@@ -246,6 +246,7 @@ export interface WorkbenchApi {
     chat: (messages: ChatMessage[], onDelta?: (delta: string) => void) => Promise<AgentReply>;
     confirmProposal: (proposal: AgentProposal) => Promise<{ content: string }>;
     getSuggestions: () => Promise<AgentSuggestion[]>;
+    getSuggestionHistory: () => Promise<AgentSuggestion[]>;
     updateSuggestion: (id: string, patch: { status: AgentSuggestionStatus; followUpAt?: string | null }) => Promise<AgentSuggestion[]>;
     checkProactive: (force?: boolean) => Promise<AgentSuggestion[]>;
     onProactiveUpdated: (callback: () => void) => () => void;

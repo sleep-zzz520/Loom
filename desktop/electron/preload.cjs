@@ -45,6 +45,7 @@ contextBridge.exposeInMainWorld('workbench', {
     },
     confirmProposal: (proposal) => ipcRenderer.invoke('agent:confirm-proposal', proposal),
     getSuggestions: () => ipcRenderer.invoke('agent:get-suggestions'),
+    getSuggestionHistory: () => ipcRenderer.invoke('agent:get-suggestion-history'),
     updateSuggestion: (id, patch) => ipcRenderer.invoke('agent:update-suggestion', id, patch),
     checkProactive: (force = false) => ipcRenderer.invoke('agent:check-proactive', force),
     onProactiveUpdated: (callback) => {

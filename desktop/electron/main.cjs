@@ -145,6 +145,7 @@ function registerIpc() {
   );
   ipcMain.handle('agent:confirm-proposal', (_event, proposal) => agent.confirmProposal(proposal));
   ipcMain.handle('agent:get-suggestions', () => proactive.listSuggestions());
+  ipcMain.handle('agent:get-suggestion-history', () => proactive.listSuggestionHistory());
   ipcMain.handle('agent:update-suggestion', (_event, id, patch) => proactive.updateSuggestion(id, patch));
   ipcMain.handle('agent:check-proactive', (_event, force = false) => proactive.checkNow({ force: Boolean(force) }));
 

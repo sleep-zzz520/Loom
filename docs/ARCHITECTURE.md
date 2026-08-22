@@ -107,9 +107,9 @@ JSON 文件（系统用户数据目录 / workbench-data.json）
 | `modules.agentRuns` | Agent 主动运行记录 |
 | `modules.agentSuggestions` | Agent 主动建议队列 |
 
-`settings` 已预留 `profile / email / netease / notify / agent / sync` 分组，供后续模块配置使用。`notify` 中的截止提醒档位、免打扰时间、每日上限与重要日期由主进程通知服务每分钟读取一次；已发提醒（包括 Agent 主动提醒）记录在 `modules.notificationHistory`，用于重启后的持久去重与每日上限统计。
+`settings` 已预留 `profile / email / netease / notify / agent / sync` 分组，供后续模块配置使用。`settings.agent.proactiveEnabled` 控制主动检查、跟进提醒和桌面送达；关闭后保留已有建议与运行记录，但不再启动新的后台主动运行。`notify` 中的截止提醒档位、免打扰时间、每日上限与重要日期由主进程通知服务每分钟读取一次；已发提醒（包括 Agent 主动提醒）记录在 `modules.notificationHistory`，用于重启后的持久去重与每日上限统计。
 
-Agent 页面会通过右上角会话面板读取 `modules.agentRuns`，展示最近主动检查的状态、触发来源与结果摘要；该记录区默认折叠，不参与主聊天画布，也不会改变主动检查的调度逻辑。
+Agent 页面会通过右上角会话面板读取 `modules.agentRuns`，展示最近主动检查的状态、触发来源与结果摘要；该记录区默认折叠，不参与主聊天画布，也不会改变主动检查的调度逻辑。页面另有一个默认折叠的“最近处理”面板，读取 `modules.agentSuggestions` 中已忽略或已安排的建议，并允许将其重新关注回主动建议队列。
 
 Agent 会话首条用户消息会生成本地摘要作为默认标题；占位标题只会在仍未手动命名时自动替换。会话历史支持行内重命名，名称与会话消息一起持久化到 `modules.agent`。
 

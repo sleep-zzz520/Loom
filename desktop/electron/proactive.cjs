@@ -7,6 +7,7 @@ const EVENT_DEBOUNCE = 15_000;
 const MAX_EVENT_RUNS_PER_DAY = 3;
 const MAX_RUNS = 120;
 const MAX_SUGGESTIONS = 40;
+const MAX_SUGGESTION_HISTORY = 20;
 const MAX_NOTIFICATION_HISTORY = 500;
 const MAX_TIMER_DELAY = 2_147_483_647;
 const DAILY_TRIGGER = 'daily-briefing';
@@ -35,6 +36,13 @@ function listSuggestions() {
     })
     .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)))
     .slice(0, MAX_SUGGESTIONS);
+}
+
+function listSuggestionHistory() {
+  return store.getModule('agentSuggestions')
+    .filter((suggestion) => ['dismissed', 'acted'].includes(suggestion.status))
+    .sort((a, b) => String(b.updatedAt || b.createdAt).localeCompare(String(a.updatedAt || a.createdAt)))
+    .slice(0, MAX_SUGGESTION_HISTORY);
 }
 
 function dailyNotificationCount(now = new Date()) {
@@ -105,6 +113,7 @@ function scheduleFollowUpWake() {
   }
   const now = new Date();
   const settings = store.getSettings();
+  if (settings.agent?.proactiveEnabled === false) return;
   const suggestions = store.getModule('agentSuggestions')
     .filter((suggestion) => !['dismissed', 'acted'].includes(suggestion.status) && suggestion.followUpAt);
   const due = dueFollowUps(now);
@@ -234,6 +243,7 @@ async function runCheck({
   if (running) return listSuggestions();
   const settings = store.getSettings();
   if (!agent.getStatus(settings)) return listSuggestions();
+  if (settings.agent?.proactiveEnabled === false) return listSuggestions();
   const now = requestedNow instanceof Date ? requestedNow : new Date();
   if (notifier.isWithinQuietHours(settings.notify?.quietHours, now)) return listSuggestions();
   const dateKey = localDateKey(now);
@@ -273,9 +283,10 @@ async function runCheck({
 }
 
 function deliverDueFollowUps({ now = new Date(), deliver = showDesktopNotification } = {}) {
+  const settings = store.getSettings();
+  if (settings.agent?.proactiveEnabled === false) return 0;
   const due = dueFollowUps(now);
   if (!due.length || notifier.isWithinQuietHours(store.getSettings().notify?.quietHours, now)) return 0;
-  const settings = store.getSettings();
   const selected = due.slice(0, availableNotificationSlots(settings, now));
   if (!selected.length) return 0;
   selected.forEach((suggestion) => deliver(suggestion));
@@ -384,6 +395,7 @@ module.exports = {
   checkEventNow,
   wake,
   listSuggestions,
+  listSuggestionHistory,
   updateSuggestion,
   localDateKey,
   hasRunForDate,
@@ -424,7 +436,12 @@ if (process.env.WORKBENCH_PROACTIVE_SELF_TEST === '1') {
     updateSuggestion(actionableSuggestion.id, { status: 'acted' });
     assert.equal(listSuggestions().find((item) => item.id === actionableSuggestion.id), undefined);
     assert.equal(store.getModule('agentSuggestions').find((item) => item.id === actionableSuggestion.id)?.status, 'acted');
+    assert.equal(listSuggestionHistory().find((item) => item.id === actionableSuggestion.id)?.id, actionableSuggestion.id);
+    updateSuggestion(actionableSuggestion.id, { status: 'unread', followUpAt: null });
+    assert.equal(listSuggestions().find((item) => item.id === actionableSuggestion.id)?.id, actionableSuggestion.id);
+    assert.equal(listSuggestionHistory().find((item) => item.id === actionableSuggestion.id), undefined);
     updateSuggestion(actionableSuggestion.id, { status: 'dismissed' });
+    assert.equal(listSuggestionHistory().find((item) => item.id === actionableSuggestion.id)?.id, actionableSuggestion.id);
 
     const followUpSuggestion = saveSuggestion({
       title: '稍后再看',
@@ -506,6 +523,12 @@ if (process.env.WORKBENCH_PROACTIVE_SELF_TEST === '1') {
       return streamResponse('data: {"choices":[{"delta":{"content":"{\\"action\\":\\"notify\\",\\"title\\":\\"优先处理方案\\",\\"summary\\":\\"准备方案即将到期，建议先确认今天的完成路径。\\",\\"reason\\":\\"这是当前最接近截止时间的高优先级待办。\\",\\"references\\":[{\\"type\\":\\"todo\\",\\"id\\":\\"todo-1\\",\\"label\\":\\"准备方案\\"}]}"}}]}\n\ndata: [DONE]\n\n');
     };
     const dailyNow = new Date('2026-08-23T09:00:00');
+    const runsBeforeDisabled = store.getModule('agentRuns').length;
+    store.setSettings({ agent: { proactiveEnabled: false } });
+    await checkNow({ force: true, now: dailyNow, notify: false });
+    assert.equal(requestCount, 0);
+    assert.equal(store.getModule('agentRuns').length, runsBeforeDisabled);
+    store.setSettings({ agent: { proactiveEnabled: true } });
     const generated = await checkNow({ force: true, now: dailyNow, notify: false });
     assert.equal(requestCount, 2);
     assert.equal(generated.length, 1);

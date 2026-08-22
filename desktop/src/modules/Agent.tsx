@@ -2,7 +2,7 @@ import { FormEvent, useEffect, useRef, useState } from 'react';
 import { ArrowDown, ArrowUp, CalendarDays, Check, ChevronDown, Clock3, Database, FileText, History, ListPlus, ListTodo, MessageSquare, MoreHorizontal, NotebookPen, Pencil, Plus, RefreshCw, Settings2, Sparkles, StickyNote, Trash2, X } from 'lucide-react';
 import AgentMessageContent from '../components/AgentMessageContent';
 import { DEFAULT_CONVERSATION_TITLE, conversationTitleFromMessages, isPlaceholderConversationTitle } from '../components/agentConversationTitle';
-import type { AgentConversation, AgentConversationStore, AgentProposal, AgentRun, AgentRunStatus, AgentSuggestion, AgentTrigger, ChatAttachment, ChatMessage, ProfileItem } from '../types';
+import type { AgentConversation, AgentConversationStore, AgentProposal, AgentRun, AgentRunStatus, AgentSuggestion, AgentSuggestionStatus, AgentTrigger, ChatAttachment, ChatMessage, ProfileItem } from '../types';
 
 const SUGGESTIONS = [
   '今天有什么要做？',
@@ -26,6 +26,13 @@ function formatRunTime(value: string) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return '时间未知';
   return date.toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
+
+function suggestionStatusLabel(status: AgentSuggestionStatus) {
+  if (status === 'acted') return '已安排';
+  if (status === 'dismissed') return '已忽略';
+  if (status === 'read') return '已了解';
+  return '未读';
 }
 
 function createConversation(): AgentConversation {
@@ -86,9 +93,11 @@ export default function Agent({ onOpenSettings }: { onOpenSettings: () => void }
   const [modelName, setModelName] = useState('');
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
   const [proactiveSuggestions, setProactiveSuggestions] = useState<AgentSuggestion[]>([]);
+  const [suggestionHistory, setSuggestionHistory] = useState<AgentSuggestion[]>([]);
   const [proactiveBusy, setProactiveBusy] = useState(false);
   const [agentRuns, setAgentRuns] = useState<AgentRun[]>([]);
   const [runsOpen, setRunsOpen] = useState(false);
+  const [suggestionHistoryOpen, setSuggestionHistoryOpen] = useState(false);
   const [suggestionMenuOpen, setSuggestionMenuOpen] = useState<string | null>(null);
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
   const [editingConversationId, setEditingConversationId] = useState<string | null>(null);
@@ -144,13 +153,16 @@ export default function Agent({ onOpenSettings }: { onOpenSettings: () => void }
   useEffect(() => {
     const stopListening = window.workbench.agent.onProactiveUpdated(() => {
       void loadProactiveSuggestions();
+      void loadSuggestionHistory();
       void loadAgentRuns();
     });
     void loadProactiveSuggestions();
+    void loadSuggestionHistory();
     void loadAgentRuns();
     void window.workbench.agent.checkProactive()
       .then((suggestions) => {
         setProactiveSuggestions(suggestions);
+        void loadSuggestionHistory();
         void loadAgentRuns();
       })
       .catch(() => {});
@@ -245,6 +257,14 @@ export default function Agent({ onOpenSettings }: { onOpenSettings: () => void }
     }
   }
 
+  async function loadSuggestionHistory() {
+    try {
+      setSuggestionHistory(await window.workbench.agent.getSuggestionHistory());
+    } catch {
+      setSuggestionHistory([]);
+    }
+  }
+
   async function loadAgentRuns() {
     try {
       const runs = await window.workbench.data.getModule('agentRuns');
@@ -259,16 +279,19 @@ export default function Agent({ onOpenSettings }: { onOpenSettings: () => void }
     setProactiveBusy(true);
     try {
       setProactiveSuggestions(await window.workbench.agent.checkProactive(true));
+      await loadSuggestionHistory();
     } catch {
       await loadProactiveSuggestions();
+      await loadSuggestionHistory();
     } finally {
       setProactiveBusy(false);
     }
   }
 
-  async function updateSuggestion(id: string, patch: { status: 'unread' | 'read' | 'dismissed' | 'acted'; followUpAt?: string | null }) {
+  async function updateSuggestion(id: string, patch: { status: AgentSuggestionStatus; followUpAt?: string | null }) {
     try {
       setProactiveSuggestions(await window.workbench.agent.updateSuggestion(id, patch));
+      await loadSuggestionHistory();
       setSuggestionMenuOpen(null);
     } catch {
       // 主动建议不是主流程，状态更新失败时保留当前页面内容。
@@ -560,6 +583,32 @@ export default function Agent({ onOpenSettings }: { onOpenSettings: () => void }
                   </article>
                 ))}
               </div>
+            </section>
+          )}
+          {suggestionHistory.length > 0 && (
+            <section className={`agent-proactive agent-suggestion-history${suggestionHistoryOpen ? ' is-open' : ''}`} aria-labelledby="agent-suggestion-history-title">
+              <span id="agent-suggestion-history-title" className="visually-hidden">最近处理的主动建议</span>
+              <button type="button" className="agent-suggestion-history-trigger" onClick={() => setSuggestionHistoryOpen((open) => !open)} aria-expanded={suggestionHistoryOpen} aria-controls="agent-suggestion-history-list">
+                <span><History size={14} />最近处理 <small>{suggestionHistory.length} 条</small></span>
+                <ChevronDown size={14} />
+              </button>
+              {suggestionHistoryOpen && (
+                <div id="agent-suggestion-history-list" className="agent-suggestion-history-list">
+                  {suggestionHistory.map((suggestion) => (
+                    <article key={suggestion.id} className="agent-history-entry">
+                      <span className={`agent-history-status${suggestion.status === 'acted' ? ' is-acted' : ' is-dismissed'}`} aria-hidden="true">
+                        {suggestion.status === 'acted' ? <Check size={13} /> : <X size={13} />}
+                      </span>
+                      <div className="agent-history-main">
+                        <strong>{suggestion.title}</strong>
+                        <p>{suggestion.summary}</p>
+                        <small>{suggestionStatusLabel(suggestion.status)} · {formatRunTime(suggestion.updatedAt || suggestion.createdAt)}</small>
+                      </div>
+                      <button type="button" className="text-btn agent-history-action" onClick={() => void updateSuggestion(suggestion.id, { status: 'unread', followUpAt: null })}>重新关注</button>
+                    </article>
+                  ))}
+                </div>
+              )}
             </section>
           )}
           <div className="chat-list" ref={scrollRef} aria-live="polite">

@@ -20,7 +20,7 @@ const SECTION_INFO: Record<SettingsKey, { title: string; description: string }> 
   },
   'settings-config': {
     title: '配置',
-    description: '连接 Agent 服务时使用的地址、密钥和模型。',
+    description: '控制 Agent 主动运行，并连接模型服务所需的地址、密钥和模型。',
   },
 };
 
@@ -406,37 +406,66 @@ export default function Settings({ section }: SettingsProps) {
           </>}
 
           {section === 'settings-config' && <>
-          <label className="field">
-            <span>API 地址</span>
-            <input
-              value={settings.agent.apiBase}
-              onChange={(event) =>
-                update({ agent: { ...settings.agent, apiBase: event.target.value } })
-              }
-              placeholder="https://api.deepseek.com/v1"
-            />
-          </label>
-          <label className="field">
-            <span>API 密钥</span>
-            <input
-              type="password"
-              value={settings.agent.apiKey}
-              onChange={(event) =>
-                update({ agent: { ...settings.agent, apiKey: event.target.value } })
-              }
-              placeholder="sk-..."
-            />
-          </label>
-          <label className="field">
-            <span>模型</span>
-            <input
-              value={settings.agent.model}
-              onChange={(event) =>
-                update({ agent: { ...settings.agent, model: event.target.value } })
-              }
-              placeholder="deepseek-chat"
-            />
-          </label>
+          <section className="settings-subsection" aria-labelledby="agent-proactive-title">
+            <div className="settings-subsection-head">
+              <div>
+                <h3 id="agent-proactive-title">主动发现</h3>
+                <p>关闭后，Agent 不会在后台自动检查或发送主动跟进提醒。</p>
+              </div>
+            </div>
+            <label className={`settings-toggle${settings.agent.proactiveEnabled !== false ? ' is-on' : ''}`}>
+              <span className="settings-toggle-copy">
+                <strong>启用主动建议</strong>
+                <small>保留已有建议和运行记录，不影响手动聊天。</small>
+              </span>
+              <input
+                type="checkbox"
+                checked={settings.agent.proactiveEnabled !== false}
+                onChange={(event) => update({ agent: { ...settings.agent, proactiveEnabled: event.target.checked } })}
+                aria-label="启用主动建议"
+              />
+              <span className="settings-toggle-track" aria-hidden="true"><span /></span>
+            </label>
+          </section>
+          <section className="settings-subsection" aria-labelledby="agent-service-title">
+            <div className="settings-subsection-head">
+              <div>
+                <h3 id="agent-service-title">Agent 服务</h3>
+                <p>连接模型服务时使用的地址、密钥和模型。</p>
+              </div>
+            </div>
+            <label className="field">
+              <span>API 地址</span>
+              <input
+                value={settings.agent.apiBase}
+                onChange={(event) =>
+                  update({ agent: { ...settings.agent, apiBase: event.target.value } })
+                }
+                placeholder="https://api.deepseek.com/v1"
+              />
+            </label>
+            <label className="field">
+              <span>API 密钥</span>
+              <input
+                type="password"
+                value={settings.agent.apiKey}
+                onChange={(event) =>
+                  update({ agent: { ...settings.agent, apiKey: event.target.value } })
+                }
+                placeholder="sk-..."
+              />
+            </label>
+            <label className="field">
+              <span>模型</span>
+              <input
+                value={settings.agent.model}
+                onChange={(event) =>
+                  update({ agent: { ...settings.agent, model: event.target.value } })
+                }
+                placeholder="deepseek-chat"
+              />
+            </label>
+          </section>
           </>}
           </div>
         </section>
