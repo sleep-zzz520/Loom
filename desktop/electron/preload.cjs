@@ -1,5 +1,14 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
+async function invokeMusic(channel, ...args) {
+  try {
+    return await ipcRenderer.invoke(channel, ...args);
+  } catch (error) {
+    const message = String(error?.message || error).replace(/^Error invoking remote method 'music:[^']+': Error: /, '');
+    throw new Error(message);
+  }
+}
+
 contextBridge.exposeInMainWorld('workbench', {
   appInfo: () => ipcRenderer.invoke('app:info'),
   data: {
@@ -34,6 +43,19 @@ contextBridge.exposeInMainWorld('workbench', {
   calendar: {
     getHolidays: (year) => ipcRenderer.invoke('calendar:get-holidays', year),
   },
+  music: {
+    serviceStatus: () => invokeMusic('music:service-status'),
+    search: (query) => invokeMusic('music:search', query),
+    hotSearch: () => invokeMusic('music:hot-search'),
+    trackDetails: (id) => invokeMusic('music:track-details', id),
+    playbackUrl: (id) => invokeMusic('music:playback-url', id),
+    accountState: () => invokeMusic('music:account-state'),
+    startQrLogin: () => invokeMusic('music:qr-start'),
+    checkQrLogin: (key) => invokeMusic('music:qr-check', key),
+    syncAccount: () => invokeMusic('music:sync-account'),
+    syncPlaylist: (id) => invokeMusic('music:sync-playlist', id),
+    logout: () => invokeMusic('music:logout'),
+  },
   agent: {
     status: () => ipcRenderer.invoke('agent:status'),
     chat: (messages, onDelta) => {
@@ -57,6 +79,11 @@ contextBridge.exposeInMainWorld('workbench', {
       const listener = () => callback?.();
       ipcRenderer.on('agent:open', listener);
       return () => ipcRenderer.removeListener('agent:open', listener);
+    },
+    onMusicCommand: (callback) => {
+      const listener = (_event, command) => callback?.(command);
+      ipcRenderer.on('agent:music-command', listener);
+      return () => ipcRenderer.removeListener('agent:music-command', listener);
     },
   },
   notify: {

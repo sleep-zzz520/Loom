@@ -59,6 +59,56 @@ export interface Category {
   name: string;
 }
 
+export interface MusicTrack {
+  id: number;
+  title: string;
+  artists: string;
+  album: string;
+  coverUrl: string | null;
+  durationMs: number | null;
+}
+
+export interface MusicAccount {
+  userId: number;
+  nickname: string;
+  avatarUrl: string | null;
+  signature: string;
+  level: number | null;
+  vipType: number | null;
+  loggedInAt?: string;
+  syncedAt?: string;
+}
+
+export interface MusicPlaylist {
+  id: number;
+  name: string;
+  coverUrl: string | null;
+  trackCount: number;
+  creatorName: string;
+  creatorId: number | null;
+  isMine: boolean;
+  subscribed: boolean;
+}
+
+export interface MusicLibrary {
+  account: MusicAccount | null;
+  playlists: MusicPlaylist[];
+  tracksByPlaylist: Record<string, MusicTrack[]>;
+  selectedPlaylistId: number | null;
+  syncedAt: string | null;
+}
+
+export interface MusicServiceStatus {
+  ready: boolean;
+  embedded: boolean;
+  base: string;
+  error: string;
+}
+
+export type AgentMusicCommand =
+  | { type: 'show-results'; query: string; tracks: MusicTrack[] }
+  | { type: 'play'; query: string; tracks: MusicTrack[]; track: MusicTrack; source: string };
+
 export interface AppSettings {
   profile: {
     name: string;
@@ -108,6 +158,7 @@ export interface WorkbenchData {
     notificationHistory: NotificationHistoryItem[];
     profileItems: ProfileItem[];
     categories: Category[];
+    music: MusicLibrary;
   };
 }
 
@@ -147,6 +198,8 @@ export interface AgentConversationStore {
 export type AgentTrigger = 'daily-briefing' | 'event-follow-up';
 export type AgentRunStatus = 'running' | 'completed' | 'failed';
 export type AgentSuggestionStatus = 'unread' | 'read' | 'dismissed' | 'acted';
+export type AgentRunContext = 'todos' | 'schedule' | 'notes' | 'library' | 'current-time';
+export type AgentRunDelivery = 'none' | 'in-app' | 'desktop-notification';
 
 export interface AgentSuggestionReference {
   type: 'todo' | 'schedule' | 'note' | 'library';
@@ -179,6 +232,9 @@ export interface AgentRun {
   startedAt: string;
   finishedAt: string | null;
   suggestionId: string | null;
+  contextTypes?: AgentRunContext[];
+  decision?: string;
+  delivery?: AgentRunDelivery;
   error?: string;
 }
 
@@ -241,6 +297,24 @@ export interface WorkbenchApi {
   calendar: {
     getHolidays: (year: number) => Promise<Record<string, { name: string; isOffDay: boolean }>>;
   };
+  music: {
+    serviceStatus: () => Promise<MusicServiceStatus>;
+    search: (query: string) => Promise<MusicTrack[]>;
+    hotSearch: () => Promise<string[]>;
+    trackDetails: (id: number) => Promise<MusicTrack | null>;
+    playbackUrl: (id: number) => Promise<string>;
+    accountState: () => Promise<MusicLibrary>;
+    startQrLogin: () => Promise<{ key: string; qrImage: string; qrUrl: string | null; expiresAt: number }>;
+    checkQrLogin: (key: string) => Promise<{
+      status: 'waiting-scan' | 'waiting-confirm' | 'expired' | 'authorized' | 'error';
+      message: string;
+      account?: MusicAccount;
+      library?: MusicLibrary;
+    }>;
+    syncAccount: () => Promise<MusicLibrary>;
+    syncPlaylist: (id: number) => Promise<{ tracks: MusicTrack[]; library: MusicLibrary }>;
+    logout: () => Promise<MusicLibrary>;
+  };
   agent: {
     status: () => Promise<boolean>;
     chat: (messages: ChatMessage[], onDelta?: (delta: string) => void) => Promise<AgentReply>;
@@ -251,6 +325,7 @@ export interface WorkbenchApi {
     checkProactive: (force?: boolean) => Promise<AgentSuggestion[]>;
     onProactiveUpdated: (callback: () => void) => () => void;
     onOpenAgent: (callback: () => void) => () => void;
+    onMusicCommand: (callback: (command: AgentMusicCommand) => void) => () => void;
   };
   notify: {
     checkTodos: () => Promise<void>;

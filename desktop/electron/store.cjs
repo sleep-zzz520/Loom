@@ -63,6 +63,13 @@ const DEFAULT_DATA = {
     notificationHistory: [],
     profileItems: [],
     categories: [],
+    music: {
+      account: null,
+      playlists: [],
+      tracksByPlaylist: {},
+      selectedPlaylistId: null,
+      syncedAt: null,
+    },
   },
 };
 

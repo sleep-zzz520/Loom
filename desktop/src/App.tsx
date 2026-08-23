@@ -17,11 +17,12 @@ import {
 import Todos from './modules/Todos';
 import Calendar from './modules/Calendar';
 import Agent from './modules/Agent';
+import Music from './modules/Music';
 import Settings from './modules/Settings';
 import Notes from './modules/Notes';
 import Profile from './modules/Profile';
 import Placeholder from './modules/Placeholder';
-import type { Category, ProfileItem } from './types';
+import type { AgentMusicCommand, Category, ProfileItem } from './types';
 
 export type ModuleKey =
   | 'todos'
@@ -50,7 +51,7 @@ const PLACEHOLDER: Record<ModuleKey, { title: string; hint: string }> = {
   notes: { title: '备忘录', hint: 'Markdown 备忘录将在后续迭代接入。' },
   mail: { title: '邮箱', hint: 'IMAP / SMTP 邮箱收发将在后续迭代接入。' },
   agent: { title: 'Agent', hint: '绑定个人资料与待办的助手将在后续迭代接入。' },
-  music: { title: '音乐', hint: '网易云音乐播放将在后续迭代接入。' },
+  music: { title: '音乐', hint: '网易云音乐搜索、账号登录和歌单同步。' },
   profile: { title: '资料', hint: '导入文件与工作台文档。' },
 };
 
@@ -68,6 +69,7 @@ function libraryItemsOnly(items: ProfileItem[]) {
 
 export default function App() {
   const [active, setActive] = useState<ModuleKey | SettingsKey>('todos');
+  const [musicCommand, setMusicCommand] = useState<AgentMusicCommand | null>(null);
   const [profileOpen, setProfileOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [sidebarWidth, setSidebarWidth] = useState(272);
@@ -101,6 +103,15 @@ export default function App() {
       setProfileOpen(false);
       setSettingsOpen(false);
       setActive('agent');
+    });
+  }, []);
+
+  useEffect(() => {
+    return window.workbench.agent.onMusicCommand((command) => {
+      setProfileOpen(false);
+      setSettingsOpen(false);
+      setMusicCommand(command);
+      if (command.type === 'play') setActive('music');
     });
   }, []);
 
@@ -216,7 +227,6 @@ export default function App() {
           <div className="brand-avatar" aria-hidden="true" />
           <div className="brand-copy">
             <h1>{appName}</h1>
-            <p>统一桌面工作台</p>
           </div>
           <button
             type="button"
@@ -342,6 +352,12 @@ export default function App() {
           <Profile initialCategoryFilter={libraryFilter} />
         ) : active === 'agent' ? (
           <Agent onOpenSettings={() => { setSettingsOpen(true); setActive('settings-config'); }} />
+        ) : active === 'music' ? (
+          <Music
+            agentCommand={musicCommand}
+            onAgentCommandHandled={() => setMusicCommand(null)}
+            onOpenSettings={() => { setSettingsOpen(true); setActive('settings-config'); }}
+          />
         ) : active === 'settings-profile' || active === 'settings-notifications' || active === 'settings-config' ? (
           <Settings section={active} />
         ) : (

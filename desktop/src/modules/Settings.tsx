@@ -466,6 +466,23 @@ export default function Settings({ section }: SettingsProps) {
               />
             </label>
           </section>
+          <section className="settings-subsection" aria-labelledby="music-service-title">
+            <div className="settings-subsection-head">
+              <div>
+                <h3 id="music-service-title">音乐服务</h3>
+                <p>默认使用工作台内置音乐服务，打开应用时自动启动；也可以填入自己的兼容服务。</p>
+              </div>
+            </div>
+            <label className="field">
+              <span>服务地址（高级）</span>
+                <input
+                  value={settings.netease.apiBase}
+                  onChange={(event) => update({ netease: { apiBase: event.target.value } })}
+                  placeholder="http://127.0.0.1:3000"
+                />
+              <small className="field-hint">保留默认地址时由工作台自动管理，不需要手动启动网页或终端服务。</small>
+            </label>
+          </section>
           </>}
           </div>
         </section>

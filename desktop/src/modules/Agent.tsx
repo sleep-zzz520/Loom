@@ -11,6 +11,14 @@ const SUGGESTIONS = [
   '帮我看看资料库里有什么',
 ];
 
+const runContextLabel = {
+  todos: '待办',
+  schedule: '日程',
+  notes: '备忘录',
+  library: '资料库',
+  'current-time': '当前时间',
+} as const;
+
 const priorityLabel = { high: '高优先级', medium: '中优先级', low: '低优先级' };
 const runTriggerLabel: Record<AgentTrigger, string> = {
   'daily-briefing': '每日简报',
@@ -20,6 +28,11 @@ const runStatusLabel: Record<AgentRunStatus, string> = {
   running: '检查中',
   completed: '已完成',
   failed: '失败',
+};
+const runDeliveryLabel: Record<NonNullable<AgentRun['delivery']>, string> = {
+  none: '无需送达',
+  'in-app': '已加入建议队列',
+  'desktop-notification': '已发桌面通知',
 };
 
 function formatRunTime(value: string) {
@@ -514,19 +527,25 @@ export default function Agent({ onOpenSettings }: { onOpenSettings: () => void }
                             : null;
                           const summary = run.status === 'failed'
                             ? run.error || '主动检查失败'
-                            : suggestion
-                              ? `生成建议：${suggestion.title}`
+                            : run.decision
+                              ? run.decision
+                              : suggestion
+                                ? `生成建议：${suggestion.title}`
                               : run.suggestionId
                                 ? '已生成一条主动建议（当前已从列表隐藏）'
                                 : run.status === 'running'
                                   ? '正在读取工作台上下文'
                                   : '检查完成，没有生成新的提醒';
+                          const contextSummary = run.contextTypes?.length
+                            ? `已读取：${run.contextTypes.map((type) => runContextLabel[type]).join('、')}`
+                            : '';
+                          const deliverySummary = run.delivery ? runDeliveryLabel[run.delivery] : '';
                           return (
                             <article key={run.id} className="session-run-entry">
                               <span className={`agent-run-status-dot${run.status === 'running' ? ' is-running' : ''}${run.status === 'failed' ? ' is-failed' : ''}`} aria-hidden="true" />
                               <div className="agent-run-copy">
                                 <strong>{runTriggerLabel[run.trigger]} · {runStatusLabel[run.status]}</strong>
-                                <small title={summary}>{summary}</small>
+                                <small title={[summary, contextSummary, deliverySummary].filter(Boolean).join(' · ')}>{summary}{contextSummary ? ` · ${contextSummary}` : ''}{deliverySummary ? ` · ${deliverySummary}` : ''}</small>
                               </div>
                               <time className="agent-run-meta" dateTime={run.startedAt}>{formatRunTime(run.startedAt)}</time>
                             </article>

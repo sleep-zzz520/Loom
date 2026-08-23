@@ -181,6 +181,11 @@ function finishRun(id, patch) {
   )));
 }
 
+function normaliseRunContext(value) {
+  const allowed = new Set(['todos', 'schedule', 'notes', 'library', 'current-time']);
+  return Array.isArray(value) ? value.filter((item) => allowed.has(item)) : [];
+}
+
 function saveSuggestion(result, now, options = {}) {
   const trigger = options.trigger === EVENT_TRIGGER ? EVENT_TRIGGER : DAILY_TRIGGER;
   const dateKey = localDateKey(now);
@@ -262,19 +267,39 @@ async function runCheck({
           ? `${DAILY_TRIGGER}:${dateKey}`
           : `${EVENT_TRIGGER}:${run.id}`),
       });
+      let delivery = 'in-app';
       if (!suggestion.notifiedAt) {
         if (notify && availableNotificationSlots(settings, now) > 0) {
           showDesktopNotification(suggestion);
           markNotified(suggestion.id, now);
+          delivery = 'desktop-notification';
         }
       }
-      finishRun(run.id, { status: 'completed', suggestionId: suggestion.id });
+      finishRun(run.id, {
+        status: 'completed',
+        suggestionId: suggestion.id,
+        contextTypes: normaliseRunContext(result.contextTypes),
+        decision: `生成建议：${suggestion.title}`,
+        delivery,
+      });
     } else {
-      finishRun(run.id, { status: 'completed', suggestionId: null });
+      finishRun(run.id, {
+        status: 'completed',
+        suggestionId: null,
+        contextTypes: normaliseRunContext(result.contextTypes),
+        decision: '检查完成，当前没有需要即时提醒的事项。',
+        delivery: 'none',
+      });
     }
   } catch (error) {
     console.error('[proactive] 主动检查失败:', error.message);
-    finishRun(run.id, { status: 'failed', suggestionId: null, error: String(error.message || error).slice(0, 300) });
+    finishRun(run.id, {
+      status: 'failed',
+      suggestionId: null,
+      decision: '检查未完成。',
+      delivery: 'none',
+      error: String(error.message || error).slice(0, 300),
+    });
   } finally {
     running = false;
     notifyUpdated();
@@ -535,6 +560,9 @@ if (process.env.WORKBENCH_PROACTIVE_SELF_TEST === '1') {
     assert.equal(generated[0].title, '优先处理方案');
     assert.equal(generated[0].references[0].id, 'todo-1');
     assert.equal(store.getModule('agentRuns')[0].status, 'completed');
+    assert.deepEqual(store.getModule('agentRuns')[0].contextTypes, ['todos']);
+    assert.equal(store.getModule('agentRuns')[0].delivery, 'in-app');
+    assert.equal(store.getModule('agentRuns')[0].decision, '生成建议：优先处理方案');
     await checkNow({ now: dailyNow, notify: false });
     assert.equal(requestCount, 2);
     const eventNow = new Date('2026-08-23T10:00:00');

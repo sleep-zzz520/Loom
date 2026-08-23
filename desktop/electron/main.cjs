@@ -7,9 +7,37 @@ const notifier = require('./notifier.cjs');
 const proactive = require('./proactive.cjs');
 const holidays = require('./holidays.cjs');
 const library = require('./library.cjs');
+const music = require('./music.cjs');
+const musicService = require('./music-service.cjs');
 
 const isDev = Boolean(process.env.VITE_DEV_SERVER_URL);
 let mainWindow = null;
+let musicServiceStatus = musicService.getStatus();
+// ponytail: 队列仅保留在当前应用进程；需要跨重启续播时再持久化最近一次 Agent 音乐会话。
+const agentMusicState = agent.createMusicState();
+
+function getMusicSettings() {
+  const settings = store.getSettings();
+  if (!musicServiceStatus.embedded || !musicService.shouldEmbed(settings.netease?.apiBase)) return settings;
+  return {
+    ...settings,
+    netease: {
+      ...settings.netease,
+      apiBase: musicServiceStatus.base,
+    },
+  };
+}
+
+function getMusicServiceStatus() {
+  const settings = store.getSettings();
+  if (!musicServiceStatus.embedded || musicService.shouldEmbed(settings.netease?.apiBase)) return musicServiceStatus;
+  return {
+    ready: true,
+    embedded: false,
+    base: settings.netease.apiBase,
+    error: '',
+  };
+}
 
 function createWindow() {
   const win = new BrowserWindow({
@@ -137,10 +165,24 @@ function registerIpc() {
   ipcMain.handle('calendar:get-holidays', (_event, year) =>
     holidays.getHolidays(year, (url) => net.fetch(url))
   );
+  ipcMain.handle('music:service-status', () => getMusicServiceStatus());
+  ipcMain.handle('music:search', (_event, query) => music.search(query, getMusicSettings()));
+  ipcMain.handle('music:hot-search', () => music.hotSearch(getMusicSettings()));
+  ipcMain.handle('music:track-details', (_event, id) => music.trackDetails(id, getMusicSettings()));
+  ipcMain.handle('music:playback-url', (_event, id) => music.playbackUrl(id, getMusicSettings()));
+  ipcMain.handle('music:account-state', () => music.accountState(store));
+  ipcMain.handle('music:qr-start', () => music.startQrLogin(getMusicSettings()));
+  ipcMain.handle('music:qr-check', (_event, key) => music.checkQrLogin(key, getMusicSettings(), store));
+  ipcMain.handle('music:sync-account', () => music.syncAccount(getMusicSettings(), store));
+  ipcMain.handle('music:sync-playlist', (_event, id) => music.syncPlaylistTracks(id, getMusicSettings(), store));
+  ipcMain.handle('music:logout', () => music.logout(getMusicSettings(), store));
   ipcMain.handle('agent:status', () => agent.getStatus(store.getSettings()));
   ipcMain.handle('agent:chat', (event, messages) =>
     agent.runAgent(messages, store.getSettings(), (delta) => {
       event.sender.send('agent:stream', delta);
+    }, {
+      onMusicCommand: (command) => event.sender.send('agent:music-command', command),
+      musicState: agentMusicState,
     })
   );
   ipcMain.handle('agent:confirm-proposal', (_event, proposal) => agent.confirmProposal(proposal));
@@ -159,16 +201,20 @@ function registerIpc() {
 
 app.whenReady().then(() => {
   store.init(app.getPath('userData'));
+  music.init(app.getPath('userData'));
   library.init(app.getPath('userData'));
-  registerIpc();
-  createWindow();
+  void (async () => {
+    musicServiceStatus = await musicService.start(store.getSettings());
+    registerIpc();
+    createWindow();
 
-  // 启动通知定时器（窗口就绪后）
-  notifier.startNotifier();
-  proactive.start({
-    onUpdated: () => mainWindow?.webContents.send('agent:proactive-updated'),
-    onOpenAgent: openAgentWindow,
-  });
+    // 启动通知定时器（窗口就绪后）
+    notifier.startNotifier();
+    proactive.start({
+      onUpdated: () => mainWindow?.webContents.send('agent:proactive-updated'),
+      onOpenAgent: openAgentWindow,
+    });
+  })();
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
@@ -180,6 +226,7 @@ app.whenReady().then(() => {
 app.on('before-quit', () => {
   proactive.stop();
   notifier.stopNotifier();
+  void musicService.stop();
 });
 
 app.on('window-all-closed', () => {

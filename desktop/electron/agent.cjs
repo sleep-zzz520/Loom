@@ -1,5 +1,6 @@
 const workspace = require('./workspace.cjs');
 const store = require('./store.cjs');
+const music = require('./music.cjs');
 
 const TOOL_DEFINITIONS = [
   {
@@ -49,6 +50,32 @@ const TOOL_DEFINITIONS = [
       name: 'get_now',
       description: '获取当前日期、时间和时区。',
       parameters: { type: 'object', properties: {} },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'search_music',
+      description: '搜索音乐服务中的歌曲。搜索结果会同步展示到音乐页；需要播放时，先用此工具取得歌曲 ID。',
+      parameters: {
+        type: 'object',
+        properties: { query: { type: 'string', description: '歌名、歌手或专辑关键词' } },
+        required: ['query'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'play_music',
+      description: '播放刚刚通过 search_music 找到的一首歌曲。可使用歌曲 ID，或在用户说“第一首”等跟进请求时使用从 1 开始的结果序号。仅当用户明确要求播放、来一首或试听时调用。',
+      parameters: {
+        type: 'object',
+        properties: {
+          id: { type: 'number', description: 'search_music 返回的歌曲 ID' },
+          index: { type: 'number', description: '上一轮搜索结果中从 1 开始的歌曲序号，例如第一首为 1' },
+        },
+      },
     },
   },
   {
@@ -112,6 +139,13 @@ const TOOL_DEFINITIONS = [
 ];
 
 const READ_TOOL_DEFINITIONS = TOOL_DEFINITIONS.filter((tool) => tool.function.name.startsWith('get_'));
+const PROACTIVE_CONTEXT_BY_TOOL = {
+  get_todos: 'todos',
+  get_schedule: 'schedule',
+  get_notes: 'notes',
+  get_library: 'library',
+  get_now: 'current-time',
+};
 
 function safeText(value, limit = 800) {
   return String(value || '').slice(0, limit);
@@ -156,6 +190,7 @@ function buildSystemPrompt(settings) {
     '当用户要求新增待办或备忘录时，只能调用 prepare_create_todo 或 prepare_create_note。它们只会生成确认卡片，绝不能声称已经保存。',
     '公共节假日与常见日期由系统自动识别。只有用户明确提到自己的生日、纪念日等私人日期时，才调用 prepare_save_important_date；它只会生成确认卡片，绝不能声称已经保存。',
     '只有用户明确说“记住”“以后都按这个”“把这条作为长期规则”等，要求保存长期工作习惯或沟通偏好时，才调用 prepare_save_preference；一次性任务、当前对话要求和 Agent 自己推测出的偏好不要保存。它只会生成确认卡片，绝不能声称已经记住。',
+    '当用户要求找歌、推荐歌曲、搜索音乐时，调用 search_music。只有用户明确要求播放、来一首或试听时，才在 search_music 后调用 play_music；可使用本轮搜索返回的歌曲 ID，或对上一轮结果使用从 1 开始的序号。音乐工具会同步更新音乐页；不要在工具返回成功前声称已经展示或播放。',
     '不要要求用户提供工作台中已有的信息；需要时调用相应工具。',
     `用户资料：${JSON.stringify({
       name: profile.name || '',
@@ -360,17 +395,67 @@ function parseArguments(value) {
   }
 }
 
-async function runAgent(messages, settings, onDelta = () => {}) {
+function createMusicState() {
+  return { query: '', tracks: [], byId: new Map() };
+}
+
+async function executeMusicTool(name, args, settings, state, musicApi = music) {
+  if (name === 'search_music') {
+    const query = safeText(args.query, 80).trim();
+    if (!query) return { toolResult: { error: '搜索关键词不能为空' } };
+    try {
+      const tracks = await musicApi.search(query, settings);
+      state.query = query;
+      state.tracks = tracks;
+      state.byId = new Map(tracks.map((track) => [track.id, track]));
+      return {
+        toolResult: { query, tracks },
+        command: { type: 'show-results', query, tracks },
+      };
+    } catch (error) {
+      return { toolResult: { error: error instanceof Error ? error.message : '音乐搜索失败' } };
+    }
+  }
+  if (name === 'play_music') {
+    const id = Number(args.id);
+    const index = Number(args.index);
+    const track = Number.isFinite(index) && index >= 1
+      ? state.tracks[Math.floor(index) - 1]
+      : state.byId.get(id);
+    if (!track) {
+      return { toolResult: { error: '请先通过 search_music 搜索，再使用返回的歌曲 ID 或结果序号播放' } };
+    }
+    try {
+      const source = await musicApi.playbackUrl(id, settings);
+      return {
+        toolResult: { playing: { id: track.id, title: track.title, artists: track.artists } },
+        command: { type: 'play', query: state.query, tracks: state.tracks, track, source },
+      };
+    } catch (error) {
+      return { toolResult: { error: error instanceof Error ? error.message : '歌曲暂时无法播放' } };
+    }
+  }
+  return null;
+}
+
+async function runAgent(messages, settings, onDelta = () => {}, options = {}) {
   if (!settings.agent?.apiBase || !settings.agent?.apiKey || !settings.agent?.model) {
     throw new Error('请先在设置中配置 Agent 的 API 地址、密钥和模型');
   }
   const full = [{ role: 'system', content: buildSystemPrompt(settings) }, ...normaliseMessages(messages)];
+  const musicState = options.musicState || createMusicState();
   for (let index = 0; index < 8; index += 1) {
     const result = await streamModel(settings, full, onDelta);
     if (!result.toolCalls.length) return { content: result.content.trim() || '我没有生成有效回复，请换一种说法。' };
     full.push({ role: 'assistant', content: result.content || null, tool_calls: result.toolCalls });
     for (const call of result.toolCalls) {
       const args = parseArguments(call.function.arguments);
+      const musicResult = await executeMusicTool(call.function.name, args, settings, musicState, options.musicApi || music);
+      if (musicResult) {
+        if (musicResult.command) options.onMusicCommand?.(musicResult.command);
+        full.push({ role: 'tool', tool_call_id: call.id, content: JSON.stringify(musicResult.toolResult) });
+        continue;
+      }
       const prepared = buildProposal(call.function.name, args);
       if (prepared) {
         if (prepared.error) {
@@ -428,6 +513,7 @@ async function runProactive(settings, now = new Date(), options = {}) {
   const trigger = options.trigger === 'event-follow-up' ? 'event-follow-up' : 'daily-briefing';
   const changeSummary = safeText(options.changeSummary, 800).trim();
   const isEventFollowUp = trigger === 'event-follow-up';
+  const contextTypes = new Set();
   const full = [
     {
       role: 'system',
@@ -456,11 +542,14 @@ async function runProactive(settings, now = new Date(), options = {}) {
   ];
   for (let index = 0; index < 6; index += 1) {
     const result = await streamModel(settings, full, () => {}, READ_TOOL_DEFINITIONS);
-    if (!result.toolCalls.length) return parseProactiveResponse(result.content);
+    if (!result.toolCalls.length) return { ...parseProactiveResponse(result.content), contextTypes: [...contextTypes] };
     full.push({ role: 'assistant', content: result.content || null, tool_calls: result.toolCalls });
     for (const call of result.toolCalls) {
       const args = parseArguments(call.function.arguments);
       const isReadTool = READ_TOOL_DEFINITIONS.some((tool) => tool.function.name === call.function.name);
+      if (isReadTool && PROACTIVE_CONTEXT_BY_TOOL[call.function.name]) {
+        contextTypes.add(PROACTIVE_CONTEXT_BY_TOOL[call.function.name]);
+      }
       full.push({
         role: 'tool',
         tool_call_id: call.id,
@@ -515,7 +604,7 @@ function getStatus(settings) {
   return Boolean(settings.agent?.apiBase && settings.agent?.apiKey && settings.agent?.model);
 }
 
-module.exports = { runAgent, runProactive, parseProactiveResponse, confirmProposal, getStatus, buildProposal };
+module.exports = { runAgent, runProactive, parseProactiveResponse, confirmProposal, getStatus, buildProposal, createMusicState, executeMusicTool };
 
 if (process.env.WORKBENCH_AGENT_SELF_TEST === '1') {
   const fs = require('node:fs');
