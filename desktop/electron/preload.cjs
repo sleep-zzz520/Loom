@@ -1,5 +1,28 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
+const agentOpenListeners = new Set();
+let pendingAgentOpen = null;
+const proactiveAlertListeners = new Set();
+let pendingProactiveAlert = null;
+
+ipcRenderer.on('agent:open', (_event, messageId) => {
+  const nextMessageId = messageId || undefined;
+  if (agentOpenListeners.size === 0) {
+    pendingAgentOpen = { messageId: nextMessageId };
+    return;
+  }
+  agentOpenListeners.forEach((callback) => callback(nextMessageId));
+});
+
+ipcRenderer.on('agent:proactive-alert', (_event, alert) => {
+  if (!alert?.messageId) return;
+  if (proactiveAlertListeners.size === 0) {
+    pendingProactiveAlert = alert;
+    return;
+  }
+  proactiveAlertListeners.forEach((callback) => callback(alert));
+});
+
 async function invokeMusic(channel, ...args) {
   try {
     return await ipcRenderer.invoke(channel, ...args);
@@ -48,6 +71,7 @@ contextBridge.exposeInMainWorld('workbench', {
     search: (query) => invokeMusic('music:search', query),
     hotSearch: () => invokeMusic('music:hot-search'),
     trackDetails: (id) => invokeMusic('music:track-details', id),
+    lyrics: (id) => invokeMusic('music:lyrics', id),
     playbackUrl: (id) => invokeMusic('music:playback-url', id),
     accountState: () => invokeMusic('music:account-state'),
     startQrLogin: () => invokeMusic('music:qr-start'),
@@ -55,6 +79,15 @@ contextBridge.exposeInMainWorld('workbench', {
     syncAccount: () => invokeMusic('music:sync-account'),
     syncPlaylist: (id) => invokeMusic('music:sync-playlist', id),
     logout: () => invokeMusic('music:logout'),
+  },
+  mail: {
+    account: () => ipcRenderer.invoke('mail:account'),
+    saveAccount: (input) => ipcRenderer.invoke('mail:save-account', input),
+    verify: () => ipcRenderer.invoke('mail:verify'),
+    list: (folder, limit) => ipcRenderer.invoke('mail:list', folder, limit),
+    getMessage: (folder, uid) => ipcRenderer.invoke('mail:get-message', folder, uid),
+    markRead: (folder, uid) => ipcRenderer.invoke('mail:mark-read', folder, uid),
+    send: (input) => ipcRenderer.invoke('mail:send', input),
   },
   agent: {
     status: () => ipcRenderer.invoke('agent:status'),
@@ -68,17 +101,49 @@ contextBridge.exposeInMainWorld('workbench', {
     confirmProposal: (proposal) => ipcRenderer.invoke('agent:confirm-proposal', proposal),
     getSuggestions: () => ipcRenderer.invoke('agent:get-suggestions'),
     getSuggestionHistory: () => ipcRenderer.invoke('agent:get-suggestion-history'),
+    getMessages: () => ipcRenderer.invoke('agent:get-messages'),
+    markMessageRead: (id, conversationId) => ipcRenderer.invoke('agent:mark-message-read', id, conversationId),
     updateSuggestion: (id, patch) => ipcRenderer.invoke('agent:update-suggestion', id, patch),
+    linkSuggestionToGoal: (id, goalId) => ipcRenderer.invoke('agent:link-suggestion-goal', id, goalId),
     checkProactive: (force = false) => ipcRenderer.invoke('agent:check-proactive', force),
+    getGoals: (includeArchived = false) => ipcRenderer.invoke('agent:get-goals', includeArchived),
+    createGoal: (input) => ipcRenderer.invoke('agent:create-goal', input),
+    updateGoal: (id, patch) => ipcRenderer.invoke('agent:update-goal', id, patch),
+    addGoalAction: (input) => ipcRenderer.invoke('agent:add-goal-action', input),
+    updateGoalAction: (id, patch) => ipcRenderer.invoke('agent:update-goal-action', id, patch),
+    getMemories: (includeArchived = false) => ipcRenderer.invoke('agent:get-memories', includeArchived),
+    reviewMemory: (id, decision) => ipcRenderer.invoke('agent:review-memory', id, decision),
+    getSkills: (includeArchived = false) => ipcRenderer.invoke('agent:get-skills', includeArchived),
+    reviewSkill: (id, decision) => ipcRenderer.invoke('agent:review-skill', id, decision),
     onProactiveUpdated: (callback) => {
       const listener = () => callback?.();
       ipcRenderer.on('agent:proactive-updated', listener);
       return () => ipcRenderer.removeListener('agent:proactive-updated', listener);
     },
-    onOpenAgent: (callback) => {
+    onProactiveAlert: (callback) => {
+      if (typeof callback !== 'function') return () => {};
+      proactiveAlertListeners.add(callback);
+      if (pendingProactiveAlert) {
+        const alert = pendingProactiveAlert;
+        pendingProactiveAlert = null;
+        queueMicrotask(() => callback(alert));
+      }
+      return () => proactiveAlertListeners.delete(callback);
+    },
+    onStateUpdated: (callback) => {
       const listener = () => callback?.();
-      ipcRenderer.on('agent:open', listener);
-      return () => ipcRenderer.removeListener('agent:open', listener);
+      ipcRenderer.on('agent:state-updated', listener);
+      return () => ipcRenderer.removeListener('agent:state-updated', listener);
+    },
+    onOpenAgent: (callback) => {
+      if (typeof callback !== 'function') return () => {};
+      agentOpenListeners.add(callback);
+      if (pendingAgentOpen) {
+        const { messageId } = pendingAgentOpen;
+        pendingAgentOpen = null;
+        queueMicrotask(() => callback(messageId));
+      }
+      return () => agentOpenListeners.delete(callback);
     },
     onMusicCommand: (callback) => {
       const listener = (_event, command) => callback?.(command);

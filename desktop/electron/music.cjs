@@ -120,6 +120,32 @@ function hotTermsFromResponse(payload) {
   return terms.map((item) => safeText(item?.searchWord || item?.first || item, 80)).filter(Boolean).slice(0, 10);
 }
 
+function parseLyrics(value) {
+  const lines = [];
+  const timestampPattern = /\[(\d{1,3}):(\d{1,2}(?:\.\d{1,3})?)\]/g;
+  safeText(value, 60000).split(/\r?\n/).forEach((rawLine) => {
+    const timestamps = [...rawLine.matchAll(timestampPattern)];
+    const text = rawLine.replace(timestampPattern, '').trim();
+    if (!text || !timestamps.length) return;
+    timestamps.forEach((timestamp) => {
+      const minutes = Number(timestamp[1]);
+      const seconds = Number(timestamp[2]);
+      const atMs = Math.round((minutes * 60 + seconds) * 1000);
+      if (Number.isFinite(atMs) && atMs >= 0) lines.push({ atMs, text: safeText(text, 500) });
+    });
+  });
+  const seen = new Set();
+  return lines
+    .sort((left, right) => left.atMs - right.atMs)
+    .filter((line) => {
+      const key = `${line.atMs}\u0000${line.text}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .slice(0, 600);
+}
+
 function normaliseCookie(value) {
   if (value && typeof value === 'object' && !Array.isArray(value)) {
     return Object.entries(value)
@@ -379,7 +405,23 @@ async function search(query, settings, options = {}) {
   if (!keywords) return [];
   const limit = Math.min(50, Math.max(1, Number(options.limit) || 20));
   const payload = await request(settings, '/search', { keywords, type: 1, limit }, options);
-  return tracksFromSearch(payload);
+  const tracks = tracksFromSearch(payload);
+  const missingCoverIds = tracks.filter((track) => !track.coverUrl).map((track) => track.id);
+  if (!missingCoverIds.length) return tracks;
+  try {
+    const details = await request(settings, '/song/detail', { ids: missingCoverIds.join(',') }, options);
+    const coverUrls = new Map(
+      (Array.isArray(details?.songs) ? details.songs : [])
+        .map(normaliseTrack)
+        .filter(Boolean)
+        .filter((track) => track.coverUrl)
+        .map((track) => [track.id, track.coverUrl])
+    );
+    return tracks.map((track) => coverUrls.has(track.id) ? { ...track, coverUrl: coverUrls.get(track.id) } : track);
+  } catch {
+    // 详情补全失败不能使原本可用的搜索结果不可用，保留列表的无封面降级状态。
+    return tracks;
+  }
 }
 
 async function hotSearch(settings, options = {}) {
@@ -393,6 +435,13 @@ async function trackDetails(id, settings, options = {}) {
   const payload = await request(settings, '/song/detail', { ids: trackId }, options);
   const songs = Array.isArray(payload?.songs) ? payload.songs : [];
   return normaliseTrack(songs[0]) || null;
+}
+
+async function lyrics(id, settings, options = {}) {
+  const trackId = Number(id);
+  if (!Number.isFinite(trackId) || trackId <= 0) throw new Error('歌曲标识无效');
+  const payload = await request(settings, '/lyric', { id: trackId }, options);
+  return parseLyrics(payload?.lrc?.lyric);
 }
 
 async function playbackUrl(id, settings, options = {}) {
@@ -425,6 +474,7 @@ module.exports = {
   normalisePlaylist,
   tracksFromSearch,
   hotTermsFromResponse,
+  parseLyrics,
   accountState,
   startQrLogin,
   checkQrLogin,
@@ -434,5 +484,6 @@ module.exports = {
   search,
   hotSearch,
   trackDetails,
+  lyrics,
   playbackUrl,
 };

@@ -12,6 +12,7 @@ export interface Todo {
   repeatUntil: string | null;
   color: string | null;
   personalDateId: string | null;
+  agentGoalId?: string | null;
   recurrenceId: string | null;
   occurrenceSourceId?: string;
   createdAt: string;
@@ -68,6 +69,11 @@ export interface MusicTrack {
   durationMs: number | null;
 }
 
+export interface MusicLyricLine {
+  atMs: number;
+  text: string;
+}
+
 export interface MusicAccount {
   userId: number;
   nickname: string;
@@ -109,6 +115,16 @@ export type AgentMusicCommand =
   | { type: 'show-results'; query: string; tracks: MusicTrack[] }
   | { type: 'play'; query: string; tracks: MusicTrack[]; track: MusicTrack; source: string };
 
+export type AgentPersonality = 'calm' | 'warm' | 'direct' | 'coach' | 'creative';
+export type AgentProactiveStyle = 'important' | 'balanced' | 'companion';
+
+export interface AgentPersona {
+  name: string;
+  personality: AgentPersonality;
+  proactiveStyle: AgentProactiveStyle;
+  customInstructions: string;
+}
+
 export interface AppSettings {
   profile: {
     name: string;
@@ -141,8 +157,86 @@ export interface AppSettings {
     maxDailyNotifications: number;
     importantDates: ImportantDate[];
   };
-  agent: { apiBase: string; apiKey: string; model: string; proactiveEnabled: boolean };
+  agent: { apiBase: string; apiKey: string; model: string; proactiveEnabled: boolean; persona: AgentPersona };
   sync: { url: string; token: string };
+}
+
+export interface MailAccount {
+  host: string;
+  port: number;
+  secure: boolean;
+  user: string;
+  smtpHost: string;
+  smtpPort: number;
+  smtpSecure: boolean;
+  hasPassword: boolean;
+  configured: boolean;
+}
+
+export interface MailAccountInput {
+  host: string;
+  port: number;
+  secure: boolean;
+  user: string;
+  smtpHost: string;
+  smtpPort: number;
+  smtpSecure: boolean;
+  password?: string;
+}
+
+export interface MailAddress {
+  name: string;
+  address: string;
+}
+
+export interface MailFolder {
+  path: string;
+  name: string;
+  specialUse: string | null;
+}
+
+export interface MailSummary {
+  uid: number;
+  folder: string;
+  from: MailAddress[];
+  to: MailAddress[];
+  subject: string;
+  date: string | null;
+  receivedAt: string | null;
+  size: number;
+  seen: boolean;
+}
+
+export interface MailAttachment {
+  filename: string;
+  contentType: string;
+  size: number;
+}
+
+export interface MailMessage extends MailSummary {
+  cc: MailAddress[];
+  replyTo: MailAddress[];
+  messageId: string | null;
+  inReplyTo: string | null;
+  text: string;
+  bodyUnavailable: boolean;
+  attachments: MailAttachment[];
+}
+
+export interface MailboxResult {
+  account: MailAccount;
+  folders: MailFolder[];
+  folder: string;
+  messages: MailSummary[];
+  total: number;
+  unseen: number;
+}
+
+export interface MailConnectionStatus {
+  imap: boolean;
+  smtp: boolean;
+  imapError: string;
+  smtpError: string;
 }
 
 export interface WorkbenchData {
@@ -152,9 +246,14 @@ export interface WorkbenchData {
   modules: {
     todos: Todo[];
     notes: Note[];
-    agent: AgentConversationStore;
-    agentRuns: AgentRun[];
-    agentSuggestions: AgentSuggestion[];
+  agent: AgentConversationStore;
+  agentRuns: AgentRun[];
+  agentSuggestions: AgentSuggestion[];
+  agentMessages: AgentDirectMessage[];
+  agentGoals: AgentGoalRecord[];
+    agentGoalActions: AgentGoalAction[];
+    agentMemories: AgentMemory[];
+    agentSkills: AgentSkill[];
     notificationHistory: NotificationHistoryItem[];
     profileItems: ProfileItem[];
     categories: Category[];
@@ -171,9 +270,15 @@ export interface WorkspaceSnapshot {
 }
 
 export interface ChatMessage {
+  id?: string;
   role: 'user' | 'assistant';
   content: string;
   attachments?: ChatAttachment[];
+  source?: 'chat' | 'proactive' | 'follow-up';
+  createdAt?: string;
+  proactiveMessageId?: string;
+  suggestionId?: string;
+  goalId?: string | null;
 }
 
 export interface ChatAttachment {
@@ -195,10 +300,89 @@ export interface AgentConversationStore {
   conversations: AgentConversation[];
 }
 
+export type AgentGoalStatus = 'active' | 'paused' | 'completed' | 'archived';
+export type AgentGoalActionType = 'todo' | 'suggestion' | 'follow-up';
+export type AgentGoalActionStatus = 'pending' | 'completed' | 'dismissed' | 'removed';
+
+export interface AgentGoalRecord {
+  id: string;
+  title: string;
+  description: string;
+  status: AgentGoalStatus;
+  targetDate: string | null;
+  outcome: string;
+  createdAt: string;
+  updatedAt: string;
+  completedAt: string | null;
+}
+
+export interface AgentGoalAction {
+  id: string;
+  goalId: string;
+  type: AgentGoalActionType;
+  title: string;
+  status: AgentGoalActionStatus;
+  todoId: string | null;
+  suggestionId: string | null;
+  followUpAt: string | null;
+  outcome: string;
+  createdAt: string;
+  updatedAt: string;
+  completedAt: string | null;
+}
+
+export interface AgentGoalSummary {
+  total: number;
+  completed: number;
+  pending: number;
+  dismissed: number;
+  removed: number;
+  progress: number;
+}
+
+export interface AgentGoal extends AgentGoalRecord {
+  summary: AgentGoalSummary;
+  actions: AgentGoalAction[];
+}
+
+export type AgentMemoryKind = 'preference' | 'fact' | 'instruction';
+export type AgentMemoryStatus = 'candidate' | 'active' | 'rejected' | 'archived';
+
+export interface AgentMemory {
+  id: string;
+  content: string;
+  kind: AgentMemoryKind;
+  status: AgentMemoryStatus;
+  source: string;
+  replacesId: string | null;
+  replacedById: string | null;
+  createdAt: string;
+  updatedAt: string;
+  reviewedAt: string | null;
+}
+
+export type AgentSkillStatus = 'candidate' | 'active' | 'rejected' | 'archived';
+
+export interface AgentSkill {
+  id: string;
+  name: string;
+  description: string;
+  instructions: string;
+  status: AgentSkillStatus;
+  source: string;
+  replacesId: string | null;
+  replacedById: string | null;
+  usageCount: number;
+  createdAt: string;
+  updatedAt: string;
+  reviewedAt: string | null;
+  lastUsedAt: string | null;
+}
+
 export type AgentTrigger = 'daily-briefing' | 'event-follow-up';
 export type AgentRunStatus = 'running' | 'completed' | 'failed';
 export type AgentSuggestionStatus = 'unread' | 'read' | 'dismissed' | 'acted';
-export type AgentRunContext = 'todos' | 'schedule' | 'notes' | 'library' | 'current-time';
+export type AgentRunContext = 'todos' | 'schedule' | 'notes' | 'library' | 'current-time' | 'goals' | 'memories' | 'skills';
 export type AgentRunDelivery = 'none' | 'in-app' | 'desktop-notification';
 
 export interface AgentSuggestionReference {
@@ -216,11 +400,46 @@ export interface AgentSuggestion {
   reason: string;
   references: AgentSuggestionReference[];
   proposal?: AgentProposal | null;
+  goalId?: string | null;
+  messageId?: string | null;
   status: AgentSuggestionStatus;
   createdAt: string;
   updatedAt: string;
   notifiedAt: string | null;
   followUpAt: string | null;
+}
+
+export type AgentDirectMessagePhase = 'initial' | 'follow-up';
+
+export interface AgentDirectMessage {
+  id: string;
+  phase: AgentDirectMessagePhase;
+  suggestionId: string;
+  goalId: string | null;
+  title: string;
+  content: string;
+  proposal: AgentProposal | null;
+  createdAt: string;
+  readAt: string | null;
+  conversationId: string | null;
+}
+
+export interface AgentProactiveAlert {
+  messageId: string;
+  phase: AgentDirectMessagePhase;
+  title: string;
+  summary: string;
+  reason: string;
+  createdAt: string;
+}
+
+export interface TaskNotification {
+  eventKey: string;
+  title: string;
+  body: string;
+  todoId?: string;
+  todoTitle?: string;
+  urgency?: 'scheduled' | 'urgent' | 'overdue';
 }
 
 export interface AgentRun {
@@ -239,10 +458,13 @@ export interface AgentRun {
 }
 
 export type AgentProposal =
-  | { kind: 'create_todo'; title: string; priority: Priority; due: string | null }
+  | { kind: 'create_todo'; title: string; priority: Priority; due: string | null; goalId?: string | null }
   | { kind: 'create_note'; title: string; content: string }
   | { kind: 'save_important_date'; title: string; date: string }
-  | { kind: 'save_preference'; preference: string };
+  | { kind: 'save_preference'; preference: string }
+  | { kind: 'create_goal'; title: string; description: string; targetDate: string | null }
+  | { kind: 'create_memory_candidate'; content: string; memoryKind: AgentMemoryKind; replacesId: string | null }
+  | { kind: 'create_skill_candidate'; name: string; description: string; instructions: string; replacesId: string | null };
 
 export interface AgentReply {
   content: string;
@@ -281,6 +503,7 @@ export interface WorkbenchApi {
         start?: string | null;
         end?: string | null;
         color?: string | null;
+        agentGoalId?: string | null;
         repeat?: Todo['repeat'];
         repeatUntil?: string | null;
       }) => Promise<Todo[]>;
@@ -302,6 +525,7 @@ export interface WorkbenchApi {
     search: (query: string) => Promise<MusicTrack[]>;
     hotSearch: () => Promise<string[]>;
     trackDetails: (id: number) => Promise<MusicTrack | null>;
+    lyrics: (id: number) => Promise<MusicLyricLine[]>;
     playbackUrl: (id: number) => Promise<string>;
     accountState: () => Promise<MusicLibrary>;
     startQrLogin: () => Promise<{ key: string; qrImage: string; qrUrl: string | null; expiresAt: number }>;
@@ -315,20 +539,43 @@ export interface WorkbenchApi {
     syncPlaylist: (id: number) => Promise<{ tracks: MusicTrack[]; library: MusicLibrary }>;
     logout: () => Promise<MusicLibrary>;
   };
+  mail: {
+    account: () => Promise<MailAccount>;
+    saveAccount: (input: MailAccountInput) => Promise<MailAccount>;
+    verify: () => Promise<MailConnectionStatus>;
+    list: (folder?: string, limit?: number) => Promise<MailboxResult>;
+    getMessage: (folder: string, uid: number) => Promise<MailMessage>;
+    markRead: (folder: string, uid: number) => Promise<{ folder: string; uid: number }>;
+    send: (input: { to: string; cc?: string; subject: string; text: string; inReplyTo?: string }) => Promise<{ messageId: string }>;
+  };
   agent: {
     status: () => Promise<boolean>;
     chat: (messages: ChatMessage[], onDelta?: (delta: string) => void) => Promise<AgentReply>;
     confirmProposal: (proposal: AgentProposal) => Promise<{ content: string }>;
     getSuggestions: () => Promise<AgentSuggestion[]>;
     getSuggestionHistory: () => Promise<AgentSuggestion[]>;
+    getMessages: () => Promise<AgentDirectMessage[]>;
+    markMessageRead: (id: string, conversationId: string) => Promise<AgentDirectMessage | null>;
     updateSuggestion: (id: string, patch: { status: AgentSuggestionStatus; followUpAt?: string | null }) => Promise<AgentSuggestion[]>;
+    linkSuggestionToGoal: (id: string, goalId: string) => Promise<AgentSuggestion[]>;
     checkProactive: (force?: boolean) => Promise<AgentSuggestion[]>;
+    getGoals: (includeArchived?: boolean) => Promise<AgentGoal[]>;
+    createGoal: (input: Pick<AgentGoalRecord, 'title'> & Partial<Pick<AgentGoalRecord, 'description' | 'targetDate'>>) => Promise<AgentGoal>;
+    updateGoal: (id: string, patch: Partial<Pick<AgentGoalRecord, 'title' | 'description' | 'targetDate' | 'status' | 'outcome'>>) => Promise<AgentGoal>;
+    addGoalAction: (input: Pick<AgentGoalAction, 'goalId' | 'title'> & Partial<Pick<AgentGoalAction, 'type' | 'followUpAt' | 'outcome' | 'status'>>) => Promise<AgentGoalAction>;
+    updateGoalAction: (id: string, patch: Partial<Pick<AgentGoalAction, 'title' | 'status' | 'followUpAt' | 'outcome'>>) => Promise<AgentGoalAction>;
+    getMemories: (includeArchived?: boolean) => Promise<AgentMemory[]>;
+    reviewMemory: (id: string, decision: 'activate' | 'reject' | 'archive' | 'restore') => Promise<AgentMemory | null>;
+    getSkills: (includeArchived?: boolean) => Promise<AgentSkill[]>;
+    reviewSkill: (id: string, decision: 'activate' | 'reject' | 'archive' | 'restore') => Promise<AgentSkill | null>;
     onProactiveUpdated: (callback: () => void) => () => void;
-    onOpenAgent: (callback: () => void) => () => void;
+    onProactiveAlert: (callback: (alert: AgentProactiveAlert) => void) => () => void;
+    onStateUpdated: (callback: () => void) => () => void;
+    onOpenAgent: (callback: (messageId?: string) => void) => () => void;
     onMusicCommand: (callback: (command: AgentMusicCommand) => void) => () => void;
   };
   notify: {
-    checkTodos: () => Promise<void>;
+    checkTodos: () => Promise<TaskNotification[]>;
     sendNtfy: (title: string, message: string) => Promise<void>;
   };
 }

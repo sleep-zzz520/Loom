@@ -8,6 +8,7 @@ const OBSERVANCE_DATES = [
   { id: 'may-20', date: '05-20', title: '5·20' },
 ];
 let checkTimer = null;
+let onNotifications = () => {};
 
 function validDate(value) {
   const date = new Date(value);
@@ -79,6 +80,9 @@ function eligibleDueNotification(todo, reminderMinutes, historyKeys, now) {
       title: '待办已超期',
       body: `「${todo.title}」${relativeTime(todo.due, now.getTime())}`,
       sendPhone: true,
+      todoId: todo.id,
+      todoTitle: todo.title,
+      urgency: 'overdue',
     };
   }
 
@@ -91,6 +95,9 @@ function eligibleDueNotification(todo, reminderMinutes, historyKeys, now) {
     title: '待办即将到期',
     body: `「${todo.title}」${relativeTime(todo.due, now.getTime())}`,
     sendPhone: false,
+    todoId: todo.id,
+    todoTitle: todo.title,
+    urgency: offset <= 60 ? 'urgent' : 'scheduled',
   };
 }
 
@@ -104,9 +111,12 @@ function collectNotifications({ todos, settings, history, automaticDates = [], n
   const maxDaily = Number.isInteger(notify.maxDailyNotifications) && notify.maxDailyNotifications > 0
     ? notify.maxDailyNotifications
     : 5;
-  const sentToday = history.filter((item) => localDateKey(item.sentAt) === today).length;
+  // Agent 的主动消息有自己的频控；不能占用待办的提醒额度，否则旧消息会静默吞掉新的超期任务。
+  const sentToday = history.filter((item) => (
+    localDateKey(item.sentAt) === today
+    && !String(item.eventKey || '').startsWith('agent-suggestion:')
+  )).length;
   const available = Math.max(0, maxDaily - sentToday);
-  if (!available) return [];
 
   const reminders = [];
   const reminderMinutes = normaliseReminderMinutes(notify.reminderMinutes);
@@ -136,7 +146,10 @@ function collectNotifications({ todos, settings, history, automaticDates = [], n
     }
   }
 
-  return reminders.slice(0, available);
+  // 超期提醒对每个待办只发送一次，优先级高于日常上限，不能因白天已收到其他消息而消失。
+  const overdue = reminders.filter((item) => item.urgency === 'overdue');
+  const regular = reminders.filter((item) => item.urgency !== 'overdue');
+  return [...overdue, ...regular.slice(0, available)];
 }
 
 async function getAutomaticDates(now) {
@@ -157,10 +170,19 @@ async function getAutomaticDates(now) {
 /** 发送一条系统通知 */
 function showSystemNotification(title, body) {
   try {
-    const notification = new Notification({ title, body });
+    if (!Notification) return false;
+    if (typeof Notification.isSupported === 'function' && !Notification.isSupported()) return false;
+    const notification = new Notification({
+      title,
+      body,
+      // macOS 播放系统提示音；其他平台会安全地忽略该选项。
+      sound: 'Glass',
+    });
     notification.show();
+    return true;
   } catch (error) {
     console.error('[notifier] 系统通知失败:', error.message);
+    return false;
   }
 }
 
@@ -231,11 +253,19 @@ async function checkTodos() {
     if (notification.sendPhone) void sendPhonePush(settings, notification.title, notification.body);
     saveHistory(notification, now);
   }
+  if (notifications.length) {
+    try {
+      onNotifications(notifications);
+    } catch (error) {
+      console.error('[notifier] 通知后处理失败:', error.message);
+    }
+  }
   return notifications;
 }
 
-function startNotifier() {
+function startNotifier(options = {}) {
   stopNotifier();
+  onNotifications = typeof options.onNotifications === 'function' ? options.onNotifications : () => {};
   void checkTodos();
   checkTimer = setInterval(() => { void checkTodos(); }, 60_000);
   console.log('[notifier] 通知定时器已启动（间隔 60 秒）');
@@ -295,6 +325,15 @@ if (process.env.WORKBENCH_NOTIFIER_SELF_TEST === '1') {
   });
   if (personalDateNotifications.length !== 1 || personalDateNotifications[0].title !== '今天是你的重要日期') {
     throw new Error('personal date should not send a todo reminder');
+  }
+  const overdueAtCap = collectNotifications({
+    todos: [{ id: 'overdue', title: '处理账单', due: '2026-05-20T08:00:00', done: false }],
+    settings,
+    history: Array.from({ length: 5 }, (_, index) => ({ eventKey: `todo:other:${index}`, sentAt: now.toISOString() })),
+    now,
+  });
+  if (overdueAtCap.length !== 1 || overdueAtCap[0].urgency !== 'overdue') {
+    throw new Error('notifier overdue-priority self-test failed');
   }
   console.log('notifier self-test ok');
 }

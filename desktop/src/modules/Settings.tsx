@@ -20,7 +20,7 @@ const SECTION_INFO: Record<SettingsKey, { title: string; description: string }> 
   },
   'settings-config': {
     title: '配置',
-    description: '控制 Agent 主动运行，并连接模型服务所需的地址、密钥和模型。',
+    description: '设定 Agent 的身份与主动沟通方式，并管理模型服务连接。',
   },
 };
 
@@ -29,6 +29,20 @@ const SAVE_STATE_LABEL: Record<SettingsSaveState, string> = {
   saving: '保存中…',
   error: '保存失败',
 };
+
+const AGENT_PERSONALITY_OPTIONS: Array<{ value: AppSettings['agent']['persona']['personality']; label: string; hint: string }> = [
+  { value: 'calm', label: '沉稳伙伴', hint: '清晰、有分寸' },
+  { value: 'warm', label: '温暖陪伴', hint: '真诚、支持你' },
+  { value: 'direct', label: '务实直率', hint: '直接、讲重点' },
+  { value: 'coach', label: '启发教练', hint: '复盘、推动行动' },
+  { value: 'creative', label: '灵感搭档', hint: '发散、给新视角' },
+];
+
+const AGENT_PROACTIVE_STYLE_OPTIONS: Array<{ value: AppSettings['agent']['persona']['proactiveStyle']; label: string; hint: string }> = [
+  { value: 'important', label: '只说关键', hint: '短而明确' },
+  { value: 'balanced', label: '适度提醒', hint: '友好、有重点' },
+  { value: 'companion', label: '陪伴跟进', hint: '更关心进展' },
+];
 
 export default function Settings({ section }: SettingsProps) {
   const [settings, setSettingsState] = useState<AppSettings | null>(null);
@@ -406,6 +420,76 @@ export default function Settings({ section }: SettingsProps) {
           </>}
 
           {section === 'settings-config' && <>
+          <section className="settings-subsection" aria-labelledby="agent-persona-title">
+            <div className="settings-subsection-head">
+              <div>
+                <h3 id="agent-persona-title">身份与沟通</h3>
+                <p>这些设定会用于普通对话、后台主动检查和主动消息；不会改变数据确认与安全边界。</p>
+              </div>
+            </div>
+            <label className="field">
+              <span>Agent 名字</span>
+              <input
+                value={settings.agent.persona.name}
+                onChange={(event) => update({
+                  agent: { ...settings.agent, persona: { ...settings.agent.persona, name: event.target.value } },
+                })}
+                maxLength={32}
+                placeholder="例如：小栖"
+              />
+              <small className="field-hint">会显示在主动消息和桌面通知中；留空时使用「Agent」。</small>
+            </label>
+            <fieldset className="settings-choice-fieldset">
+              <legend>基础人格</legend>
+              <div className="settings-choice-group agent-persona-options" role="radiogroup" aria-label="Agent 基础人格">
+                {AGENT_PERSONALITY_OPTIONS.map((option) => (
+                  <label key={option.value} className={`settings-choice${settings.agent.persona.personality === option.value ? ' is-selected' : ''}`}>
+                    <input
+                      type="radio"
+                      name="agent-personality"
+                      value={option.value}
+                      checked={settings.agent.persona.personality === option.value}
+                      onChange={() => update({
+                        agent: { ...settings.agent, persona: { ...settings.agent.persona, personality: option.value } },
+                      })}
+                    />
+                    <span className="settings-choice-copy"><strong>{option.label}</strong><small>{option.hint}</small></span>
+                  </label>
+                ))}
+              </div>
+            </fieldset>
+            <fieldset className="settings-choice-fieldset">
+              <legend>主动联系时</legend>
+              <div className="settings-choice-group agent-proactive-style-options" role="radiogroup" aria-label="Agent 主动沟通方式">
+                {AGENT_PROACTIVE_STYLE_OPTIONS.map((option) => (
+                  <label key={option.value} className={`settings-choice${settings.agent.persona.proactiveStyle === option.value ? ' is-selected' : ''}`}>
+                    <input
+                      type="radio"
+                      name="agent-proactive-style"
+                      value={option.value}
+                      checked={settings.agent.persona.proactiveStyle === option.value}
+                      onChange={() => update({
+                        agent: { ...settings.agent, persona: { ...settings.agent.persona, proactiveStyle: option.value } },
+                      })}
+                    />
+                    <span className="settings-choice-copy"><strong>{option.label}</strong><small>{option.hint}</small></span>
+                  </label>
+                ))}
+              </div>
+            </fieldset>
+            <label className="field">
+              <span>自定义合作约定</span>
+              <textarea
+                value={settings.agent.persona.customInstructions}
+                onChange={(event) => update({
+                  agent: { ...settings.agent, persona: { ...settings.agent.persona, customInstructions: event.target.value } },
+                })}
+                maxLength={1200}
+                placeholder="例如：少用表情；发现风险先直说；讨论创意时先给三个方向。"
+              />
+              <small className="field-hint">写下希望它长期遵守的称呼、语气、协作习惯或表达偏好。</small>
+            </label>
+          </section>
           <section className="settings-subsection" aria-labelledby="agent-proactive-title">
             <div className="settings-subsection-head">
               <div>

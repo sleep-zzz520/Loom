@@ -1,4 +1,5 @@
 const store = require('./store.cjs');
+const agentState = require('./agent-state.cjs');
 
 const PRIORITIES = ['high', 'medium', 'low'];
 const REPEAT_TYPES = ['none', 'daily', 'weekly', 'monthly', 'yearly'];
@@ -25,6 +26,10 @@ function createTodo(input = {}) {
   }
   const repeat = REPEAT_TYPES.includes(input.repeat) ? input.repeat : 'none';
   const repeatUntil = normaliseRepeatUntil(input.repeatUntil);
+  const agentGoalId = String(input.agentGoalId || '').trim() || null;
+  if (agentGoalId && agentState.getGoal(agentGoalId)?.status !== 'active') {
+    throw new Error('只能将待办关联到进行中的 Agent 目标');
+  }
   if (repeatUntil && input.due && dateKey(input.due) > repeatUntil) {
     throw new Error('重复截止日期不能早于首次日期');
   }
@@ -40,14 +45,17 @@ function createTodo(input = {}) {
     repeatUntil: repeat === 'none' ? null : repeatUntil,
     color: input.color || null,
     personalDateId: input.personalDateId || null,
+    agentGoalId,
     recurrenceId: null,
     createdAt: new Date().toISOString(),
   };
-  return store.updateModule('todos', (items) => [todo, ...items]);
+  const todos = store.updateModule('todos', (items) => [todo, ...items]);
+  if (agentGoalId) agentState.linkTodo(agentGoalId, todo);
+  return todos;
 }
 
 function updateTodo(id, patch = {}) {
-  return store.updateModule('todos', (items) => {
+  const todos = store.updateModule('todos', (items) => {
     const current = items.find((todo) => todo.id === id);
     if (!current) return items;
     const recurrenceId = current.recurrenceId || (current.repeat !== 'none' ? current.id : null);
@@ -76,6 +84,9 @@ function updateTodo(id, patch = {}) {
     }
     return items.map((item) => (item.id === id ? updated : item));
   });
+  const updated = todos.find((todo) => todo.id === id);
+  if (updated?.agentGoalId) agentState.syncTodo(updated);
+  return todos;
 }
 
 function dateKey(value) {
@@ -107,7 +118,9 @@ function calcNextDue(due, repeat) {
 }
 
 function removeTodo(id) {
-  return store.updateModule('todos', (items) => items.filter((todo) => todo.id !== id));
+  const todos = store.updateModule('todos', (items) => items.filter((todo) => todo.id !== id));
+  agentState.markTodoRemoved(id);
+  return todos;
 }
 
 function monthDay(value) {

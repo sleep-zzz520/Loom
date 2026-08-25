@@ -1,5 +1,6 @@
 const store = require('./store.cjs');
 const agent = require('./agent.cjs');
+const agentState = require('./agent-state.cjs');
 const notifier = require('./notifier.cjs');
 
 const CHECK_INTERVAL = 60_000;
@@ -8,6 +9,7 @@ const MAX_EVENT_RUNS_PER_DAY = 3;
 const MAX_RUNS = 120;
 const MAX_SUGGESTIONS = 40;
 const MAX_SUGGESTION_HISTORY = 20;
+const MAX_AGENT_MESSAGES = 120;
 const MAX_NOTIFICATION_HISTORY = 500;
 const MAX_TIMER_DELAY = 2_147_483_647;
 const DAILY_TRIGGER = 'daily-briefing';
@@ -20,6 +22,7 @@ let pendingWake = '';
 let running = false;
 let onUpdated = () => {};
 let onOpenAgent = () => {};
+let onAlert = () => {};
 
 function localDateKey(timestamp = new Date()) {
   const date = new Date(timestamp);
@@ -94,11 +97,12 @@ function dueFollowUps(now = new Date()) {
 }
 
 function recordSuggestionNotification(suggestion, now, phase) {
+  const persona = agent.getPersona(store.getSettings());
   store.updateModule('notificationHistory', (history) => [
     {
       id: store.newId(),
       eventKey: `agent-suggestion:${suggestion.id}:${phase}`,
-      title: 'Agent 主动发现',
+      title: `${persona.name} 主动消息`,
       body: `${suggestion.title}\n${suggestion.summary}`.slice(0, 300),
       sentAt: now.toISOString(),
     },
@@ -147,6 +151,23 @@ function notifyUpdated() {
   }
 }
 
+function announceAlert(suggestion, directMessage, phase) {
+  const messageId = String(directMessage?.id || suggestion?.messageId || '').trim();
+  if (!suggestion || !messageId) return;
+  try {
+    onAlert({
+      messageId,
+      phase: phase === 'follow-up' ? 'follow-up' : 'initial',
+      title: String(suggestion.title || '').slice(0, 160),
+      summary: String(suggestion.summary || '').slice(0, 300),
+      reason: String(suggestion.reason || '').slice(0, 300),
+      createdAt: new Date().toISOString(),
+    });
+  } catch (error) {
+    console.error('[proactive] 主动提醒送达失败:', error.message);
+  }
+}
+
 function countRunsForDate(trigger, dateKey) {
   return store.getModule('agentRuns').filter((run) => (
     run.trigger === trigger
@@ -182,8 +203,87 @@ function finishRun(id, patch) {
 }
 
 function normaliseRunContext(value) {
-  const allowed = new Set(['todos', 'schedule', 'notes', 'library', 'current-time']);
+  const allowed = new Set(['todos', 'schedule', 'notes', 'library', 'current-time', 'goals', 'memories', 'skills']);
   return Array.isArray(value) ? value.filter((item) => allowed.has(item)) : [];
+}
+
+function directMessageContent(suggestion, phase) {
+  const persona = agent.getPersona(store.getSettings());
+  const isFollowUp = phase === 'follow-up';
+  const intro = isFollowUp
+    ? `${persona.name} 来跟进一下「${suggestion.title}」。`
+    : `${persona.name} 想主动和你说一件事：「${suggestion.title}」。`;
+  const reason = String(suggestion.reason || '').trim();
+  const closing = suggestion.proposal
+    ? persona.proactiveStyle === 'important'
+      ? '需要的话，我可以帮你安排下一步。'
+      : '如果你愿意，我可以继续帮你安排下一步。'
+    : persona.proactiveStyle === 'companion'
+      ? '如果方便，直接告诉我你现在的进展；我会继续陪你一起推进。'
+      : '你可以直接回复我当前进展，我会继续和你一起推进。';
+  return [intro, String(suggestion.summary || '').trim(), reason ? `我注意到：${reason}` : '', closing]
+    .filter(Boolean)
+    .join('\n\n')
+    .slice(0, 1800);
+}
+
+function listDirectMessages() {
+  return store.getModule('agentMessages')
+    .filter((message) => message && message.id && message.suggestionId && message.content)
+    .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
+}
+
+function saveDirectMessage(suggestion, now, phase = 'initial') {
+  const existing = listDirectMessages().find((message) => message.suggestionId === suggestion.id && message.phase === phase);
+  if (existing) return existing;
+  const linkedConversationId = phase === 'follow-up'
+    ? listDirectMessages().find((message) => message.suggestionId === suggestion.id && message.phase === 'initial')?.conversationId || `proactive-${suggestion.id}`
+    : `proactive-${suggestion.id}`;
+  const message = {
+    id: store.newId(),
+    phase,
+    suggestionId: suggestion.id,
+    goalId: suggestion.goalId || null,
+    title: phase === 'follow-up' ? `跟进：${suggestion.title}` : suggestion.title,
+    content: directMessageContent(suggestion, phase),
+    proposal: suggestion.proposal || null,
+    createdAt: now.toISOString(),
+    readAt: null,
+    conversationId: linkedConversationId,
+  };
+  store.updateModule('agentMessages', (messages) => [message, ...messages].slice(0, MAX_AGENT_MESSAGES));
+  return message;
+}
+
+function markDirectMessageRead(id, conversationId) {
+  const messageId = String(id || '').trim();
+  const nextConversationId = String(conversationId || '').trim().slice(0, 160);
+  const current = listDirectMessages().find((message) => message.id === messageId);
+  if (!current || !nextConversationId) return null;
+  const effectiveConversationId = current.conversationId || nextConversationId;
+  const readAt = current.readAt || new Date().toISOString();
+  store.updateModule('agentMessages', (messages) => messages.map((message) => (
+    message.id === current.id || message.conversationId === effectiveConversationId
+      ? { ...message, readAt: message.readAt || readAt, conversationId: message.conversationId || effectiveConversationId }
+      : message
+  )));
+  const linkedSuggestion = store.getModule('agentSuggestions').find((suggestion) => suggestion.id === current.suggestionId);
+  if (linkedSuggestion?.status === 'unread') {
+    const now = new Date().toISOString();
+    store.updateModule('agentSuggestions', (suggestions) => suggestions.map((suggestion) => (
+      suggestion.id === linkedSuggestion.id ? { ...suggestion, status: 'read', updatedAt: now } : suggestion
+    )));
+  }
+  return listDirectMessages().find((message) => message.id === current.id) || null;
+}
+
+function markSuggestionMessagesRead(suggestionId) {
+  const id = String(suggestionId || '').trim();
+  if (!id) return;
+  const now = new Date().toISOString();
+  store.updateModule('agentMessages', (messages) => messages.map((message) => (
+    message.suggestionId === id && !message.readAt ? { ...message, readAt: now } : message
+  )));
 }
 
 function saveSuggestion(result, now, options = {}) {
@@ -201,6 +301,7 @@ function saveSuggestion(result, now, options = {}) {
     reason: result.reason,
     references: result.references || [],
     proposal: result.proposal || null,
+    goalId: result.goalId || result.proposal?.goalId || null,
     status: 'unread',
     createdAt: now.toISOString(),
     updatedAt: now.toISOString(),
@@ -208,8 +309,13 @@ function saveSuggestion(result, now, options = {}) {
     followUpAt: normaliseFollowUpAt(result.followUpAt) || null,
   };
   store.updateModule('agentSuggestions', (suggestions) => [suggestion, ...suggestions].slice(0, MAX_SUGGESTIONS));
+  const directMessage = saveDirectMessage(suggestion, now);
+  const savedSuggestion = store.updateModule('agentSuggestions', (suggestions) => suggestions.map((item) => (
+    item.id === suggestion.id ? { ...item, messageId: directMessage.id } : item
+  ))).find((item) => item.id === suggestion.id) || { ...suggestion, messageId: directMessage.id };
+  if (savedSuggestion.goalId) agentState.linkSuggestion(savedSuggestion.goalId, savedSuggestion);
   scheduleFollowUpWake();
-  return suggestion;
+  return savedSuggestion;
 }
 
 function markNotified(id, now) {
@@ -221,15 +327,52 @@ function markNotified(id, now) {
   recordSuggestionNotification(suggestion, now, 'initial');
 }
 
-function showDesktopNotification(suggestion) {
+/**
+ * 将关键待办提醒稳定地写入 Agent 消息流。
+ * 这条路径不依赖模型请求：截止/超期属于确定性事件，不能因模型超时、每日简报已运行或事件额度耗尽而漏发。
+ */
+function notifyTodoReminder(notification, now = new Date()) {
+  const todoId = String(notification?.todoId || '').trim();
+  const todoTitle = String(notification?.todoTitle || '').trim();
+  const urgency = notification?.urgency;
+  if (!todoId || !todoTitle || !['urgent', 'overdue'].includes(urgency)) return null;
+  if (store.getSettings().agent?.proactiveEnabled === false) return null;
+
+  const isOverdue = urgency === 'overdue';
+  const suggestion = saveSuggestion({
+    title: `${isOverdue ? '任务已超期' : '任务即将到期'}：${todoTitle}`,
+    summary: String(notification.body || '').trim() || `「${todoTitle}」${isOverdue ? '已超期' : '即将到期'}。`,
+    reason: isOverdue
+      ? '系统检测到该待办已越过截止时间，需要尽快处理。'
+      : '系统检测到该待办将在 1 小时内到期，建议优先安排。',
+    references: [{ type: 'todo', id: todoId, label: todoTitle }],
+  }, now, {
+    trigger: EVENT_TRIGGER,
+    dedupeKey: `todo-reminder:${String(notification.eventKey || `${todoId}:${urgency}`)}`,
+  });
+
+  if (suggestion.notifiedAt) return suggestion;
+  store.updateModule('agentSuggestions', (suggestions) => suggestions.map((item) => (
+    item.id === suggestion.id ? { ...item, notifiedAt: now.toISOString(), updatedAt: now.toISOString() } : item
+  )));
+  const delivered = store.getModule('agentSuggestions').find((item) => item.id === suggestion.id) || suggestion;
+  announceAlert(delivered, { id: delivered.messageId }, 'initial');
+  notifyUpdated();
+  return delivered;
+}
+
+function showDesktopNotification(suggestion, directMessage = null) {
   try {
     const { Notification } = require('electron');
+    if (!Notification) return;
     if (typeof Notification.isSupported === 'function' && !Notification.isSupported()) return;
     const notification = new Notification({
-      title: 'Agent 主动发现',
+      title: `${agent.getPersona(store.getSettings()).name} 主动消息`,
       body: `${suggestion.title}\n${suggestion.summary}`.slice(0, 300),
+      // macOS uses the bundled system alert sound; other platforms safely ignore this option.
+      sound: 'Glass',
     });
-    notification.on('click', () => onOpenAgent());
+    notification.on('click', () => onOpenAgent(directMessage?.id || suggestion.messageId || ''));
     notification.show();
   } catch (error) {
     console.error('[proactive] 桌面通知失败:', error.message);
@@ -270,7 +413,9 @@ async function runCheck({
       let delivery = 'in-app';
       if (!suggestion.notifiedAt) {
         if (notify && availableNotificationSlots(settings, now) > 0) {
-          showDesktopNotification(suggestion);
+          const directMessage = { id: suggestion.messageId };
+          showDesktopNotification(suggestion, directMessage);
+          announceAlert(suggestion, directMessage, 'initial');
           markNotified(suggestion.id, now);
           delivery = 'desktop-notification';
         }
@@ -314,7 +459,12 @@ function deliverDueFollowUps({ now = new Date(), deliver = showDesktopNotificati
   if (!due.length || notifier.isWithinQuietHours(store.getSettings().notify?.quietHours, now)) return 0;
   const selected = due.slice(0, availableNotificationSlots(settings, now));
   if (!selected.length) return 0;
-  selected.forEach((suggestion) => deliver(suggestion));
+  const directMessages = new Map(selected.map((suggestion) => [suggestion.id, saveDirectMessage(suggestion, now, 'follow-up')]));
+  selected.forEach((suggestion) => {
+    const directMessage = directMessages.get(suggestion.id);
+    deliver(suggestion, directMessage);
+    announceAlert(suggestion, directMessage, 'follow-up');
+  });
   store.updateModule('agentSuggestions', (suggestions) => suggestions.map((suggestion) => {
     if (!selected.some((item) => item.id === suggestion.id)) return suggestion;
     return {
@@ -381,7 +531,29 @@ function updateSuggestion(id, patch = {}) {
       updatedAt: new Date().toISOString(),
     };
   }));
+  const updated = store.getModule('agentSuggestions').find((suggestion) => suggestion.id === id);
+  if (updated) {
+    agentState.syncSuggestion(updated);
+    if (['read', 'dismissed', 'acted'].includes(updated.status)) markSuggestionMessagesRead(updated.id);
+  }
   scheduleFollowUpWake();
+  notifyUpdated();
+  return listSuggestions();
+}
+
+function linkSuggestionToGoal(id, goalId) {
+  const suggestionId = String(id || '').trim();
+  const goal = agentState.getGoal(String(goalId || '').trim());
+  if (!goal || goal.status !== 'active') throw new Error('只能关联到进行中的目标');
+  const current = store.getModule('agentSuggestions').find((suggestion) => suggestion.id === suggestionId);
+  if (!current) throw new Error('主动建议不存在');
+  if (current.goalId && current.goalId !== goal.id) throw new Error('这条建议已经关联到其他目标');
+  const now = new Date().toISOString();
+  store.updateModule('agentSuggestions', (suggestions) => suggestions.map((suggestion) => (
+    suggestion.id === current.id ? { ...suggestion, goalId: goal.id, updatedAt: now } : suggestion
+  )));
+  const linked = store.getModule('agentSuggestions').find((suggestion) => suggestion.id === current.id);
+  if (linked) agentState.linkSuggestion(goal.id, linked);
   notifyUpdated();
   return listSuggestions();
 }
@@ -390,6 +562,7 @@ function start(options = {}) {
   stop();
   onUpdated = options.onUpdated || (() => {});
   onOpenAgent = options.onOpenAgent || (() => {});
+  onAlert = options.onAlert || (() => {});
   deliverDueFollowUps();
   scheduleFollowUpWake();
   void checkNow();
@@ -419,9 +592,13 @@ module.exports = {
   checkNow,
   checkEventNow,
   wake,
+  notifyTodoReminder,
   listSuggestions,
   listSuggestionHistory,
+  listDirectMessages,
+  markDirectMessageRead,
   updateSuggestion,
+  linkSuggestionToGoal,
   localDateKey,
   hasRunForDate,
   countRunsForDate,
@@ -440,6 +617,7 @@ if (process.env.WORKBENCH_PROACTIVE_SELF_TEST === '1') {
     const originalFetch = global.fetch;
     try {
     store.init(dir);
+    store.setSettings({ agent: { persona: { name: '小栖', personality: 'warm', proactiveStyle: 'companion', customInstructions: '' } } });
     const directNow = new Date('2026-08-22T09:00:00');
     const directSuggestion = saveSuggestion({
       title: '检查今天的安排',
@@ -448,7 +626,17 @@ if (process.env.WORKBENCH_PROACTIVE_SELF_TEST === '1') {
       references: [],
     }, directNow);
     assert.equal(listSuggestions()[0].id, directSuggestion.id);
+    const initialMessage = listDirectMessages().find((message) => message.suggestionId === directSuggestion.id && message.phase === 'initial');
+    assert.equal(initialMessage?.id, directSuggestion.messageId);
+    assert.match(initialMessage?.content || '', /小栖 想主动和你说一件事/);
+    const readMessage = markDirectMessageRead(initialMessage.id, 'proactive-self-test-conversation');
+    assert.equal(readMessage?.conversationId, initialMessage?.conversationId);
+    assert.ok(readMessage?.readAt);
     assert.equal(hasRunForDate(localDateKey(directNow)), false);
+    const linkedGoal = agentState.createGoal({ title: '主动建议关联自检' });
+    linkSuggestionToGoal(directSuggestion.id, linkedGoal.id);
+    assert.equal(store.getModule('agentSuggestions').find((item) => item.id === directSuggestion.id)?.goalId, linkedGoal.id);
+    assert.equal(agentState.getGoal(linkedGoal.id)?.summary.pending, 1);
     updateSuggestion(directSuggestion.id, { status: 'dismissed' });
     assert.equal(listSuggestions().length, 0);
     const actionableSuggestion = saveSuggestion({
@@ -462,6 +650,7 @@ if (process.env.WORKBENCH_PROACTIVE_SELF_TEST === '1') {
     assert.equal(listSuggestions().find((item) => item.id === actionableSuggestion.id), undefined);
     assert.equal(store.getModule('agentSuggestions').find((item) => item.id === actionableSuggestion.id)?.status, 'acted');
     assert.equal(listSuggestionHistory().find((item) => item.id === actionableSuggestion.id)?.id, actionableSuggestion.id);
+    assert.ok(listDirectMessages().find((message) => message.suggestionId === actionableSuggestion.id)?.readAt);
     updateSuggestion(actionableSuggestion.id, { status: 'unread', followUpAt: null });
     assert.equal(listSuggestions().find((item) => item.id === actionableSuggestion.id)?.id, actionableSuggestion.id);
     assert.equal(listSuggestionHistory().find((item) => item.id === actionableSuggestion.id), undefined);
@@ -474,6 +663,8 @@ if (process.env.WORKBENCH_PROACTIVE_SELF_TEST === '1') {
       reason: '主动检查自检。',
       references: [],
     }, directNow, { dedupeKey: 'self-test-follow-up' });
+    const followUpInitialMessage = listDirectMessages().find((message) => message.suggestionId === followUpSuggestion.id && message.phase === 'initial');
+    markDirectMessageRead(followUpInitialMessage.id, 'follow-up-self-test-conversation');
     const followUpAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
     updateSuggestion(followUpSuggestion.id, { status: 'read', followUpAt });
     assert.equal(listSuggestions().find((item) => item.id === followUpSuggestion.id), undefined);
@@ -488,6 +679,9 @@ if (process.env.WORKBENCH_PROACTIVE_SELF_TEST === '1') {
     assert.equal(deliverDueFollowUps({ now: directNow, deliver: () => { followUpDeliveryCount += 1; } }), 1);
     assert.equal(followUpDeliveryCount, 1);
     assert.equal(store.getModule('agentSuggestions').find((item) => item.id === followUpSuggestion.id)?.followUpAt, null);
+    const followUpMessage = listDirectMessages().find((message) => message.suggestionId === followUpSuggestion.id && message.phase === 'follow-up');
+    assert.match(followUpMessage?.content || '', /小栖 来跟进一下/);
+    assert.equal(followUpMessage?.conversationId, followUpInitialMessage?.conversationId);
     assert.equal(dailyNotificationCount(directNow), 1);
     updateSuggestion(followUpSuggestion.id, { status: 'dismissed' });
 
@@ -506,7 +700,12 @@ if (process.env.WORKBENCH_PROACTIVE_SELF_TEST === '1') {
     assert.equal(store.getModule('agentSuggestions').find((item) => item.id === cappedFollowUp.id)?.followUpAt, new Date(directNow.getTime() - 1_000).toISOString());
     updateSuggestion(cappedFollowUp.id, { status: 'dismissed' });
 
-    store.setSettings({ agent: { apiBase: 'http://agent-self-test.invalid', apiKey: 'test-key', model: 'test-model' } });
+    const deliveredAlerts = [];
+    onAlert = (alert) => deliveredAlerts.push(alert);
+    store.setSettings({
+      notify: { maxDailyNotifications: 5 },
+      agent: { apiBase: 'http://agent-self-test.invalid', apiKey: 'test-key', model: 'test-model' },
+    });
     store.updateModule('todos', () => [{
       id: 'todo-1',
       title: '准备方案',
@@ -554,15 +753,32 @@ if (process.env.WORKBENCH_PROACTIVE_SELF_TEST === '1') {
     assert.equal(requestCount, 0);
     assert.equal(store.getModule('agentRuns').length, runsBeforeDisabled);
     store.setSettings({ agent: { proactiveEnabled: true } });
-    const generated = await checkNow({ force: true, now: dailyNow, notify: false });
+    const generated = await checkNow({ force: true, now: dailyNow, notify: true });
     assert.equal(requestCount, 2);
     assert.equal(generated.length, 1);
     assert.equal(generated[0].title, '优先处理方案');
     assert.equal(generated[0].references[0].id, 'todo-1');
+    assert.equal(deliveredAlerts.length, 1);
+    assert.equal(deliveredAlerts[0].messageId, generated[0].messageId);
+    assert.equal(deliveredAlerts[0].title, '优先处理方案');
+    assert.equal(deliveredAlerts[0].summary, '准备方案即将到期，建议先确认今天的完成路径。');
+    assert.equal(deliveredAlerts[0].phase, 'initial');
     assert.equal(store.getModule('agentRuns')[0].status, 'completed');
     assert.deepEqual(store.getModule('agentRuns')[0].contextTypes, ['todos']);
-    assert.equal(store.getModule('agentRuns')[0].delivery, 'in-app');
+    assert.equal(store.getModule('agentRuns')[0].delivery, 'desktop-notification');
     assert.equal(store.getModule('agentRuns')[0].decision, '生成建议：优先处理方案');
+    const deadlineAlert = notifyTodoReminder({
+      eventKey: 'todo:todo-1:due:2026-08-23T10:00:00.000Z:overdue',
+      todoId: 'todo-1',
+      todoTitle: '准备方案',
+      urgency: 'overdue',
+      body: '「准备方案」已超期 1 分钟',
+    }, new Date('2026-08-23T10:01:00'));
+    assert.equal(deadlineAlert.title, '任务已超期：准备方案');
+    assert.equal(deadlineAlert.notifiedAt, '2026-08-23T02:01:00.000Z');
+    assert.equal(store.getModule('agentMessages').some((message) => message.suggestionId === deadlineAlert.id), true);
+    assert.equal(deliveredAlerts.at(-1).messageId, deadlineAlert.messageId);
+    onAlert = () => {};
     await checkNow({ now: dailyNow, notify: false });
     assert.equal(requestCount, 2);
     const eventNow = new Date('2026-08-23T10:00:00');

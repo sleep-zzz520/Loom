@@ -164,8 +164,8 @@ export default function Todos() {
 
   async function checkNotifications() {
     try {
-      await window.workbench.notify.checkTodos();
-      setNotifyMsg('已检查待办通知');
+      const notifications = await window.workbench.notify.checkTodos();
+      setNotifyMsg(notifications.length ? `已送达 ${notifications.length} 条提醒` : '暂无需要发送的提醒');
     } catch {
       setNotifyMsg('检查失败');
     }

@@ -9,16 +9,27 @@ void (async () => {
   assert.equal(music.buildUrl(settings, '/search', { keywords: '海阔天空', type: 1 }).includes('keywords=%E6%B5%B7%E9%98%94%E5%A4%A9%E7%A9%BA'), true);
   assert.deepEqual(music.tracksFromSearch({ result: { songs: [{ id: 1, name: '自检歌曲', ar: [{ name: '自检歌手' }], al: { name: '自检专辑', picUrl: 'https://example.com/cover.jpg' }, dt: 180000 }] } }), [{ id: 1, title: '自检歌曲', artists: '自检歌手', album: '自检专辑', coverUrl: 'https://example.com/cover.jpg', durationMs: 180000 }]);
   assert.deepEqual(music.hotTermsFromResponse({ data: [{ searchWord: '热门歌曲' }, { searchWord: '热门歌手' }] }), ['热门歌曲', '热门歌手']);
+  assert.deepEqual(music.parseLyrics('[ar:自检歌手]\n[00:01.20]第一句\n[00:02.00][00:03.50]重复的副歌\n[00:03.50]重复的副歌'), [
+    { atMs: 1200, text: '第一句' },
+    { atMs: 2000, text: '重复的副歌' },
+    { atMs: 3500, text: '重复的副歌' },
+  ]);
   const seen = [];
   const fetcher = async (url) => {
     seen.push(url);
     if (url.includes('/search?')) return { ok: true, json: async () => ({ code: 200, result: { songs: [{ id: 2, name: '搜索歌曲', artists: [{ name: '搜索歌手' }], album: { name: '搜索专辑' } }] } }) };
+    if (url.includes('/song/detail?')) return { ok: true, json: async () => ({ code: 200, songs: [{ id: 2, name: '搜索歌曲', ar: [{ name: '搜索歌手' }], al: { name: '搜索专辑', picUrl: 'https://example.com/search-cover.jpg' } }] }) };
+    if (url.includes('/lyric?')) return { ok: true, json: async () => ({ code: 200, lrc: { lyric: '[00:01.00]测试歌词' } }) };
     if (url.includes('/song/url/v1')) return { ok: true, json: async () => ({ code: 200, data: [{ url: null }] }) };
     return { ok: true, json: async () => ({ code: 200, data: [{ url: 'https://example.com/audio.mp3' }] }) };
   };
-  assert.equal((await music.search('搜索歌曲', settings, { fetcher }))[0].artists, '搜索歌手');
+  const searchTracks = await music.search('搜索歌曲', settings, { fetcher });
+  assert.equal(searchTracks[0].artists, '搜索歌手');
+  assert.equal(searchTracks[0].coverUrl, 'https://example.com/search-cover.jpg');
+  assert.equal(seen[1].includes('/song/detail?ids=2'), true);
+  assert.deepEqual(await music.lyrics(1, settings, { fetcher }), [{ atMs: 1000, text: '测试歌词' }]);
   assert.equal(await music.playbackUrl(1, settings, { fetcher }), 'https://example.com/audio.mp3');
-  assert.equal(seen.length, 3);
+  assert.equal(seen.length, 5);
   const details = await music.trackDetails(3, settings, { fetcher: async () => ({ ok: true, json: async () => ({ code: 200, songs: [{ id: 3, name: '详情歌曲', ar: [{ name: '详情歌手' }], al: { name: '详情专辑', picUrl: 'https://example.com/detail-cover.jpg' } }] }) }) });
   assert.equal(details.coverUrl, 'https://example.com/detail-cover.jpg');
   await assert.rejects(() => music.search('离线服务', settings, { fetcher: async () => { throw new Error('socket closed'); } }), /无法连接音乐服务/);

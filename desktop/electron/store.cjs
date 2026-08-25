@@ -5,7 +5,7 @@ const crypto = require('node:crypto');
 let dataFile = '';
 
 const DEFAULT_DATA = {
-  schemaVersion: 1,
+  schemaVersion: 4,
   settings: {
     profile: {
       name: '',
@@ -38,7 +38,18 @@ const DEFAULT_DATA = {
       maxDailyNotifications: 5,
       importantDates: [],
     },
-    agent: { apiBase: '', apiKey: '', model: '', proactiveEnabled: true },
+    agent: {
+      apiBase: '',
+      apiKey: '',
+      model: '',
+      proactiveEnabled: true,
+      persona: {
+        name: 'Agent',
+        personality: 'calm',
+        proactiveStyle: 'balanced',
+        customInstructions: '',
+      },
+    },
     sync: { url: '', token: '' },
   },
   state: {
@@ -60,6 +71,11 @@ const DEFAULT_DATA = {
     },
     agentRuns: [],
     agentSuggestions: [],
+    agentMessages: [],
+    agentGoals: [],
+    agentGoalActions: [],
+    agentMemories: [],
+    agentSkills: [],
     notificationHistory: [],
     profileItems: [],
     categories: [],
@@ -106,7 +122,7 @@ function readData() {
   }
   try {
     const saved = JSON.parse(fs.readFileSync(dataFile, 'utf8'));
-    return normalizeAgentModule(mergeDeep(clone(DEFAULT_DATA), saved));
+    return normalizeData(mergeDeep(clone(DEFAULT_DATA), saved));
   } catch {
     return clone(DEFAULT_DATA);
   }
@@ -128,6 +144,35 @@ function normalizeAgentModule(data) {
       }],
     };
   }
+  return data;
+}
+
+/** 保留旧版“工作偏好”，并把它们以已审核记忆的形式暴露给新的记忆系统。 */
+function normalizeData(data) {
+  data.schemaVersion = Math.max(Number(data.schemaVersion) || 0, DEFAULT_DATA.schemaVersion);
+  normalizeAgentModule(data);
+  const preferences = Array.isArray(data.settings?.profile?.preferences) ? data.settings.profile.preferences : [];
+  const memories = Array.isArray(data.modules?.agentMemories) ? data.modules.agentMemories : [];
+  const known = new Set(memories.map((memory) => `${memory.kind}:${memory.content}`));
+  for (const preference of preferences) {
+    const content = String(preference || '').replace(/\s+/g, ' ').trim();
+    if (!content || known.has(`preference:${content}`)) continue;
+    const id = `legacy-preference-${crypto.createHash('sha256').update(content).digest('hex').slice(0, 16)}`;
+    memories.push({
+      id,
+      content,
+      kind: 'preference',
+      status: 'active',
+      source: 'legacy-profile',
+      replacesId: null,
+      replacedById: null,
+      createdAt: '',
+      updatedAt: '',
+      reviewedAt: '',
+    });
+    known.add(`preference:${content}`);
+  }
+  data.modules.agentMemories = memories;
   return data;
 }
 
@@ -198,6 +243,7 @@ if (process.env.WORKBENCH_STORE_SELF_TEST === '1') {
   try {
     fs.writeFileSync(path.join(dir, 'workbench-data.json'), JSON.stringify({
       modules: { agent: [{ role: 'user', content: '保留这条旧消息' }] },
+      settings: { profile: { preferences: ['旧版工作偏好'] } },
     }), 'utf8');
     init(dir);
     const migrated = getModule('agent');
@@ -205,6 +251,13 @@ if (process.env.WORKBENCH_STORE_SELF_TEST === '1') {
     assert.equal(migrated.conversations[0].title, '此前对话');
     assert.equal(migrated.conversations[0].messages[0].content, '保留这条旧消息');
     assert.equal(getSettings().agent.proactiveEnabled, true);
+    assert.deepEqual(getSettings().agent.persona, {
+      name: 'Agent',
+      personality: 'calm',
+      proactiveStyle: 'balanced',
+      customInstructions: '',
+    });
+    assert.equal(getModule('agentMemories').find((memory) => memory.content === '旧版工作偏好')?.status, 'active');
     console.log('store self-test ok');
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });

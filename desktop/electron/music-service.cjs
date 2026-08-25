@@ -1,3 +1,5 @@
+const http = require('node:http');
+
 const DEFAULT_BASE = 'http://127.0.0.1:3000';
 const DEFAULT_HOST = '127.0.0.1';
 const DEFAULT_PORT = 3000;
@@ -32,6 +34,18 @@ function waitForListening(candidate) {
     };
     candidate.once('listening', onListening);
     candidate.once('error', onError);
+  });
+}
+
+function probeExistingService(base = DEFAULT_BASE) {
+  const target = `${normaliseBase(base) || DEFAULT_BASE}/`;
+  return new Promise((resolve) => {
+    const request = http.get(target, { timeout: 1500 }, (response) => {
+      response.resume();
+      resolve(true);
+    });
+    request.once('timeout', () => request.destroy());
+    request.once('error', () => resolve(false));
   });
 }
 
@@ -70,6 +84,16 @@ async function start(settings = {}) {
     console.log(`[music-service] 内置音乐服务已启动：${DEFAULT_BASE}`);
   } catch (error) {
     if (candidate && !candidate.listening) candidate.close();
+    if (error?.code === 'EADDRINUSE' && await probeExistingService(DEFAULT_BASE)) {
+      status = {
+        ready: true,
+        embedded: true,
+        base: DEFAULT_BASE,
+        error: '',
+      };
+      console.log(`[music-service] 复用已运行的音乐服务：${DEFAULT_BASE}`);
+      return { ...status };
+    }
     const detail = error?.code === 'EADDRINUSE'
       ? `${DEFAULT_BASE} 端口已被占用`
       : String(error?.message || error || '未知错误');
@@ -101,6 +125,7 @@ module.exports = {
   DEFAULT_BASE,
   normaliseBase,
   shouldEmbed,
+  probeExistingService,
   start,
   getStatus,
   stop,
@@ -108,15 +133,25 @@ module.exports = {
 
 if (process.env.WORKBENCH_MUSIC_SERVICE_SELF_TEST === '1') {
   const assert = require('node:assert/strict');
-  assert.equal(normaliseBase('http://127.0.0.1:3000/'), DEFAULT_BASE);
-  assert.equal(shouldEmbed(''), true);
-  assert.equal(shouldEmbed(DEFAULT_BASE), true);
-  assert.equal(shouldEmbed('http://music.example.test'), false);
-  void start({ netease: { apiBase: 'http://music.example.test' } }).then((result) => {
+  void (async () => {
+    assert.equal(normaliseBase('http://127.0.0.1:3000/'), DEFAULT_BASE);
+    assert.equal(shouldEmbed(''), true);
+    assert.equal(shouldEmbed(DEFAULT_BASE), true);
+    assert.equal(shouldEmbed('http://music.example.test'), false);
+
+    const probeServer = http.createServer((_request, response) => response.writeHead(204).end());
+    probeServer.listen({ host: DEFAULT_HOST, port: 0 });
+    await waitForListening(probeServer);
+    const port = probeServer.address().port;
+    assert.equal(await probeExistingService(`http://${DEFAULT_HOST}:${port}`), true);
+    await new Promise((resolve) => probeServer.close(resolve));
+    assert.equal(await probeExistingService(`http://${DEFAULT_HOST}:${port}`), false);
+
+    const result = await start({ netease: { apiBase: 'http://music.example.test' } });
     assert.equal(result.embedded, false);
     assert.equal(result.base, 'http://music.example.test');
     console.log('music service self-test ok');
-  }).catch((error) => {
+  })().catch((error) => {
     console.error(error);
     process.exitCode = 1;
   });

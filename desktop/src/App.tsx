@@ -1,5 +1,7 @@
 import { useEffect, useState, type CSSProperties, type FocusEvent } from 'react';
 import {
+  ArrowUpRight,
+  BellRing,
   CalendarDays,
   ChevronDown,
   CheckSquare,
@@ -13,16 +15,17 @@ import {
   Sparkles,
   StickyNote,
   Trash2,
+  X,
 } from 'lucide-react';
 import Todos from './modules/Todos';
 import Calendar from './modules/Calendar';
 import Agent from './modules/Agent';
 import Music from './modules/Music';
+import MailModule from './modules/Mail';
 import Settings from './modules/Settings';
 import Notes from './modules/Notes';
 import Profile from './modules/Profile';
-import Placeholder from './modules/Placeholder';
-import type { AgentMusicCommand, Category, ProfileItem } from './types';
+import type { AgentMusicCommand, AgentProactiveAlert, Category, ProfileItem } from './types';
 
 export type ModuleKey =
   | 'todos'
@@ -45,16 +48,6 @@ const NAV: { key: ModuleKey; label: string; icon: typeof CheckSquare }[] = [
   { key: 'profile', label: '资料', icon: FileLock2 },
 ];
 
-const PLACEHOLDER: Record<ModuleKey, { title: string; hint: string }> = {
-  todos: { title: '待办', hint: '' },
-  calendar: { title: '日历', hint: '日程与待办到期视图将在后续迭代接入。' },
-  notes: { title: '备忘录', hint: 'Markdown 备忘录将在后续迭代接入。' },
-  mail: { title: '邮箱', hint: 'IMAP / SMTP 邮箱收发将在后续迭代接入。' },
-  agent: { title: 'Agent', hint: '绑定个人资料与待办的助手将在后续迭代接入。' },
-  music: { title: '音乐', hint: '网易云音乐搜索、账号登录和歌单同步。' },
-  profile: { title: '资料', hint: '导入文件与工作台文档。' },
-};
-
 function isLibraryItem(item: ProfileItem) {
   return item.source === 'imported' || item.source === 'created';
 }
@@ -67,9 +60,57 @@ function libraryItemsOnly(items: ProfileItem[]) {
   return items.filter(isLibraryItem);
 }
 
+function ProactiveAlertToast({
+  alert,
+  onOpen,
+  onDismiss,
+}: {
+  alert: AgentProactiveAlert;
+  onOpen: () => void;
+  onDismiss: () => void;
+}) {
+  const isFollowUp = alert.phase === 'follow-up';
+  const alertText = `${alert.title}${alert.summary}`;
+  const isDeadlineAlert = /(?:即将到期|已超期)/.test(alertText);
+  const isOverdue = /超期/.test(alertText);
+  const taskTitle = isDeadlineAlert
+    ? (alert.title.replace(/^任务(?:即将到期|已超期)[：:]\s*/, '') || alert.title)
+    : alert.title;
+  const timing = isDeadlineAlert ? alert.summary.replace(/^「.*?」\s*/, '').trim() : '';
+  const recommendation = isOverdue
+    ? '建议先处理，或重新安排截止时间。'
+    : isDeadlineAlert
+      ? '建议优先处理，避免超期。'
+      : alert.summary;
+  return (
+    <aside className={`proactive-alert-toast ${isOverdue ? 'is-overdue' : 'is-upcoming'}`} role="alert" aria-live="assertive" aria-labelledby="proactive-alert-title">
+      <header className="proactive-alert-header">
+        <span className="proactive-alert-status">
+          <BellRing size={14} aria-hidden="true" />
+          {isOverdue ? '已超期' : (isDeadlineAlert ? '即将到期' : (isFollowUp ? '跟进提醒' : 'Agent 提醒'))}
+        </span>
+        <button type="button" className="proactive-alert-close" onClick={onDismiss} aria-label="关闭主动提醒" title="关闭主动提醒"><X size={16} /></button>
+      </header>
+      <div className="proactive-alert-copy">
+        <h2 id="proactive-alert-title">
+          <span>{taskTitle}</span>
+          {timing && <em>{timing}</em>}
+        </h2>
+        <p>{recommendation}</p>
+        <div className="proactive-alert-actions">
+          <button type="button" className="proactive-alert-open" onClick={onOpen}>打开 Agent <ArrowUpRight size={14} /></button>
+        </div>
+      </div>
+    </aside>
+  );
+}
+
 export default function App() {
   const [active, setActive] = useState<ModuleKey | SettingsKey>('todos');
   const [musicCommand, setMusicCommand] = useState<AgentMusicCommand | null>(null);
+  const [agentOpenMessageId, setAgentOpenMessageId] = useState('');
+  const [proactiveAlert, setProactiveAlert] = useState<AgentProactiveAlert | null>(null);
+  const [unreadProactiveCount, setUnreadProactiveCount] = useState(0);
   const [profileOpen, setProfileOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [sidebarWidth, setSidebarWidth] = useState(272);
@@ -99,11 +140,37 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    return window.workbench.agent.onOpenAgent(() => {
+    return window.workbench.agent.onOpenAgent((messageId) => {
       setProfileOpen(false);
       setSettingsOpen(false);
+      setProactiveAlert(null);
+      setAgentOpenMessageId(messageId || '');
       setActive('agent');
     });
+  }, []);
+
+  useEffect(() => {
+    let disposed = false;
+    const refreshUnreadCount = () => {
+      void window.workbench.agent.getMessages()
+        .then((messages) => {
+          if (!disposed) setUnreadProactiveCount(messages.filter((message) => !message.readAt).length);
+        })
+        .catch(() => {
+          if (!disposed) setUnreadProactiveCount(0);
+        });
+    };
+    refreshUnreadCount();
+    const stopUpdated = window.workbench.agent.onProactiveUpdated(refreshUnreadCount);
+    const stopAlert = window.workbench.agent.onProactiveAlert((alert) => {
+      setProactiveAlert(alert);
+      refreshUnreadCount();
+    });
+    return () => {
+      disposed = true;
+      stopUpdated();
+      stopAlert();
+    };
   }, []);
 
   useEffect(() => {
@@ -144,6 +211,15 @@ export default function App() {
     setProfileOpen(true);
     setActive('profile');
     window.dispatchEvent(new CustomEvent('workbench:profile-category', { detail: filter }));
+  }
+
+  function openProactiveAlert() {
+    if (!proactiveAlert) return;
+    setProfileOpen(false);
+    setSettingsOpen(false);
+    setAgentOpenMessageId(proactiveAlert.messageId);
+    setActive('agent');
+    setProactiveAlert(null);
   }
 
   async function saveLibraryCategory() {
@@ -285,10 +361,15 @@ export default function App() {
                   setSettingsOpen(false);
                   setActive(key);
                 }}
-              >
-                <Icon size={17} />
-                <span>{label}</span>
-              </button>
+                >
+                  <Icon size={17} />
+                  <span>{label}</span>
+                  {key === 'agent' && unreadProactiveCount > 0 && (
+                    <i className="nav-agent-unread-badge" aria-label={`${unreadProactiveCount} 条未读 Agent 提醒`} title={`${unreadProactiveCount} 条未读 Agent 提醒`}>
+                      {unreadProactiveCount > 9 ? '9+' : unreadProactiveCount}
+                    </i>
+                  )}
+                </button>
             </div>
           ))}
           <div className={`nav-group${active.startsWith('settings-') ? ' has-active' : ''}`}>
@@ -348,10 +429,16 @@ export default function App() {
           <Calendar />
         ) : active === 'notes' ? (
           <Notes />
+        ) : active === 'mail' ? (
+          <MailModule />
         ) : active === 'profile' ? (
           <Profile initialCategoryFilter={libraryFilter} />
         ) : active === 'agent' ? (
-          <Agent onOpenSettings={() => { setSettingsOpen(true); setActive('settings-config'); }} />
+          <Agent
+            onOpenSettings={() => { setSettingsOpen(true); setActive('settings-config'); }}
+            openProactiveMessageId={agentOpenMessageId}
+            onProactiveMessageOpened={() => setAgentOpenMessageId('')}
+          />
         ) : active === 'music' ? (
           <Music
             agentCommand={musicCommand}
@@ -361,9 +448,16 @@ export default function App() {
         ) : active === 'settings-profile' || active === 'settings-notifications' || active === 'settings-config' ? (
           <Settings section={active} />
         ) : (
-          <Placeholder title={PLACEHOLDER[active].title} hint={PLACEHOLDER[active].hint} />
+          null
         )}
       </main>
+      {proactiveAlert && (
+        <ProactiveAlertToast
+          alert={proactiveAlert}
+          onOpen={openProactiveAlert}
+          onDismiss={() => setProactiveAlert(null)}
+        />
+      )}
       {categoryDeleteTarget && (() => {
         const itemCount = libraryItems.filter((item) => item.categoryId === categoryDeleteTarget.id).length;
         return (

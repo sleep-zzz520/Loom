@@ -107,9 +107,10 @@ Agent 不应该默认永久保存所有聊天内容。应区分：
 
 - `electron/notifier.cjs`：保留确定性提醒规则，逐步扩展为事件和调度基础设施。
 - `electron/agent.cjs`：保留模型调用、工具注册和确认卡片，抽出可以被聊天和主动运行共同使用的 Agent Runtime。
-- `src/modules/Agent.tsx`：未来不只是聊天页，还要承载主动发现、待处理建议、当前目标、确认卡片和历史跟进。
-- `electron/store.cjs`：增加主动运行记录、建议队列、用户目标、候选记忆和跟进状态。
-- `src/types.ts`：将聊天消息、主动建议、行动提案、运行记录和记忆条目建模为不同数据类型。
+- `src/modules/Agent.tsx`：承载聊天、主动发现、待处理建议、当前目标、确认卡片、行动结果、候选记忆和候选 Skill 审核。
+- `electron/agent-state.cjs`：统一校验和持久化目标、目标行动、候选记忆和候选 Skill，并把待办/建议状态同步回目标进度。
+- `electron/store.cjs`：保存主动运行记录、建议队列、用户目标、候选记忆、Skill 和跟进状态。
+- `src/types.ts`：将聊天消息、主动建议、行动提案、运行记录、目标、记忆和 Skill 建模为不同数据类型。
 
 目标架构：
 
