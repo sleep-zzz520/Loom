@@ -3,9 +3,10 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 
 let dataFile = '';
+const MAX_AVATAR_FILE_SIZE = 5 * 1024 * 1024;
 
 const DEFAULT_DATA = {
-  schemaVersion: 4,
+  schemaVersion: 5,
   settings: {
     profile: {
       name: '',
@@ -13,6 +14,7 @@ const DEFAULT_DATA = {
       role: '',
       about: '',
       currentFocus: '',
+      avatarDataUrl: '',
       responseLength: 'balanced',
       confirmationMode: 'mutations-only',
       preferences: [],
@@ -43,6 +45,8 @@ const DEFAULT_DATA = {
       apiKey: '',
       model: '',
       proactiveEnabled: true,
+      // 邮件正文可能包含私人信息；只有用户在设置中明确开启后，才允许发送候选邮件摘要给 Agent 模型判断。
+      emailMonitorEnabled: false,
       persona: {
         name: 'Agent',
         personality: 'calm',
@@ -76,6 +80,8 @@ const DEFAULT_DATA = {
     agentGoalActions: [],
     agentMemories: [],
     agentSkills: [],
+    // 仅记录收件箱 UID 游标，不保存邮件正文；用于避免重启后重复分析、重复提醒同一封邮件。
+    agentMailWatch: null,
     notificationHistory: [],
     profileItems: [],
     categories: [],
@@ -202,9 +208,23 @@ function getSettings() {
   return readData().settings;
 }
 
+function normaliseAvatarDataUrl(value) {
+  const avatarDataUrl = String(value || '');
+  const avatarMatch = avatarDataUrl.match(/^data:image\/(jpeg|png);base64,([A-Za-z0-9+/]+={0,2})$/);
+  if (!avatarMatch) return '';
+  const bytes = Buffer.from(avatarMatch[2], 'base64');
+  if (!bytes.length || bytes.length > MAX_AVATAR_FILE_SIZE) return '';
+  const isJpeg = avatarMatch[1] === 'jpeg' && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
+  const isPng = avatarMatch[1] === 'png'
+    && bytes.length >= 8
+    && bytes.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+  return isJpeg || isPng ? avatarDataUrl : '';
+}
+
 function setSettings(patch) {
   return updateData((data) => {
     data.settings = mergeDeep(data.settings, patch);
+    data.settings.profile.avatarDataUrl = normaliseAvatarDataUrl(data.settings?.profile?.avatarDataUrl);
   }).settings;
 }
 
@@ -251,12 +271,16 @@ if (process.env.WORKBENCH_STORE_SELF_TEST === '1') {
     assert.equal(migrated.conversations[0].title, '此前对话');
     assert.equal(migrated.conversations[0].messages[0].content, '保留这条旧消息');
     assert.equal(getSettings().agent.proactiveEnabled, true);
+    assert.equal(getSettings().agent.emailMonitorEnabled, false);
     assert.deepEqual(getSettings().agent.persona, {
       name: 'Agent',
       personality: 'calm',
       proactiveStyle: 'balanced',
       customInstructions: '',
     });
+    assert.equal(setSettings({ profile: { avatarDataUrl: 'data:image/png;base64,iVBORw0KGgo=' } }).profile.avatarDataUrl, 'data:image/png;base64,iVBORw0KGgo=');
+    assert.equal(setSettings({ profile: { avatarDataUrl: 'data:image/gif;base64,AA==' } }).profile.avatarDataUrl, '');
+    assert.equal(setSettings({ profile: { avatarDataUrl: 'data:image/png;base64,AA==' } }).profile.avatarDataUrl, '');
     assert.equal(getModule('agentMemories').find((memory) => memory.content === '旧版工作偏好')?.status, 'active');
     console.log('store self-test ok');
   } finally {

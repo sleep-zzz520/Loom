@@ -1,5 +1,5 @@
 import { FormEvent, useEffect, useRef, useState } from 'react';
-import { Archive, ArrowDown, ArrowUp, Brain, CalendarDays, Check, ChevronDown, CircleCheck, Clock3, Database, FileText, History, ListPlus, ListTodo, MessageSquare, MoreHorizontal, NotebookPen, Pause, Pencil, Plus, RefreshCw, RotateCcw, Settings2, Sparkles, StickyNote, Target, Trash2, WandSparkles, X } from 'lucide-react';
+import { Archive, ArrowDown, ArrowUp, Brain, CalendarDays, Check, ChevronDown, CircleCheck, Clock3, Database, FileText, History, ListPlus, ListTodo, Mail, MessageSquare, MoreHorizontal, NotebookPen, Pause, Pencil, Plus, RefreshCw, RotateCcw, Settings2, Sparkles, StickyNote, Target, Trash2, WandSparkles, X } from 'lucide-react';
 import AgentMessageContent from '../components/AgentMessageContent';
 import { DEFAULT_CONVERSATION_TITLE, conversationTitleFromMessages, isPlaceholderConversationTitle } from '../components/agentConversationTitle';
 import type { AgentConversation, AgentConversationStore, AgentDirectMessage, AgentGoal, AgentGoalAction, AgentGoalActionStatus, AgentGoalStatus, AgentMemory, AgentProposal, AgentRun, AgentRunStatus, AgentSkill, AgentSuggestion, AgentSuggestionStatus, AgentTrigger, ChatAttachment, ChatMessage, ProfileItem } from '../types';
@@ -20,6 +20,7 @@ const runContextLabel = {
   goals: '目标',
   memories: '长期记忆',
   skills: 'Skill',
+  mail: '邮件',
 } as const;
 
 const priorityLabel = { high: '高优先级', medium: '中优先级', low: '低优先级' };
@@ -38,6 +39,7 @@ const actionStatusLabel: Record<AgentGoalActionStatus, string> = {
 const runTriggerLabel: Record<AgentTrigger, string> = {
   'daily-briefing': '每日简报',
   'event-follow-up': '事件跟进',
+  'mail-triage': '邮件分诊',
 };
 const runStatusLabel: Record<AgentRunStatus, string> = {
   running: '检查中',
@@ -1151,6 +1153,9 @@ function ProposalCard({ proposal, busy, onConfirm, onCancel }: { proposal: Agent
   const isGoal = proposal.kind === 'create_goal';
   const isMemory = proposal.kind === 'create_memory_candidate';
   const isSkill = proposal.kind === 'create_skill_candidate';
+  const isEmail = proposal.kind === 'send_email';
+  const isMusicPlaylistChange = proposal.kind === 'add_music_to_playlist' || proposal.kind === 'remove_music_from_playlist';
+  const isMusicPlaylistAdd = proposal.kind === 'add_music_to_playlist';
   const icon = isTodo
     ? <ListTodo size={17} />
     : isImportantDate
@@ -1161,9 +1166,13 @@ function ProposalCard({ proposal, busy, onConfirm, onCancel }: { proposal: Agent
           ? <Target size={17} />
           : isMemory
             ? <Brain size={17} />
-            : isSkill
-              ? <WandSparkles size={17} />
-              : <StickyNote size={17} />;
+              : isSkill
+                ? <WandSparkles size={17} />
+                : isEmail
+                  ? <Mail size={17} />
+                : isMusicPlaylistChange
+                ? <ListPlus size={17} />
+                : <StickyNote size={17} />;
   const title = isTodo
     ? '添加待办'
     : isImportantDate
@@ -1174,8 +1183,12 @@ function ProposalCard({ proposal, busy, onConfirm, onCancel }: { proposal: Agent
           ? '创建持续目标'
           : isMemory
             ? '加入候选长期记忆'
-            : isSkill
-              ? '加入候选 Skill'
+          : isSkill
+            ? '加入候选 Skill'
+            : isEmail
+              ? '发送邮件'
+            : isMusicPlaylistChange
+              ? (isMusicPlaylistAdd ? '添加到网易云歌单' : '从网易云歌单移除')
               : '保存备忘录';
   const body = isPreference
     ? proposal.preference
@@ -1183,6 +1196,10 @@ function ProposalCard({ proposal, busy, onConfirm, onCancel }: { proposal: Agent
       ? proposal.content
       : isSkill
         ? proposal.name
+        : isEmail
+          ? `“${proposal.subject}”`
+        : isMusicPlaylistChange
+          ? `“${proposal.trackTitle}”`
         : proposal.title;
   return (
     <aside className="agent-proposal" aria-label="待确认操作">
@@ -1203,13 +1220,17 @@ function ProposalCard({ proposal, busy, onConfirm, onCancel }: { proposal: Agent
           <small>确认后进入候选区，审核采纳后才会影响后续对话。</small>
         ) : isSkill ? (
           <small>{proposal.description} · 确认后仍需审核启用。</small>
+        ) : isEmail ? (
+          <small>收件人：{proposal.to}{proposal.cc ? ` · 抄送：${proposal.cc}` : ''} · 确认后会通过已配置的 SMTP 账户发出。</small>
+        ) : isMusicPlaylistChange ? (
+          <small>{isMusicPlaylistAdd ? '添加到' : '从'}「{proposal.playlistName}」{isMusicPlaylistAdd ? '，确认后会同步到网易云音乐。' : '移除，确认后会同步到网易云音乐。'}</small>
         ) : (
           <small>{proposal.content}</small>
         )}
       </div>
       <div className="agent-proposal-actions">
         <button type="button" className="text-btn" onClick={onCancel} disabled={busy}>取消</button>
-        <button type="button" className="btn-primary agent-confirm" onClick={onConfirm} disabled={busy}><Check size={15} />{busy ? '保存中' : '确认保存'}</button>
+        <button type="button" className="btn-primary agent-confirm" onClick={onConfirm} disabled={busy}><Check size={15} />{busy ? '同步中' : isEmail ? '确认发送' : isMusicPlaylistChange ? '确认同步' : '确认保存'}</button>
       </div>
     </aside>
   );

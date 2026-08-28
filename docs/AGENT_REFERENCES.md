@@ -6,7 +6,7 @@ OpenClaw 和 Hermes 对本项目都有参考价值，但不直接作为项目依
 
 - OpenClaw 主要参考“主动 Agent 的运行时”：Gateway / 控制平面、heartbeat、定时自动化、事件唤醒、独立运行、结果送达和权限控制。
 - Hermes 主要参考“Agent 的记忆与成长”：持久记忆、用户画像、技能系统、按需加载、跨会话搜索、经验沉淀和无人值守任务。
-- 我们最终要做的是服务于个人工作台的主动智能层，而不是通用型万能 Agent。
+- 我们最终要做的是服务于 Loom 的主动智能层，而不是通用型万能 Agent。
 
 这里的 Hermes 指 Nous Research 的 Hermes Agent。
 
@@ -19,7 +19,7 @@ OpenClaw 的主动运行时
           +
 Hermes 的记忆与技能
           +
-个人工作台的数据、权限和交互
+Loom 的数据、权限和交互
           ↓
 服务于个人工作流的主动 Agent
 ```

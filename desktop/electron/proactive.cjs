@@ -2,8 +2,10 @@ const store = require('./store.cjs');
 const agent = require('./agent.cjs');
 const agentState = require('./agent-state.cjs');
 const notifier = require('./notifier.cjs');
+const mail = require('./mail.cjs');
 
 const CHECK_INTERVAL = 60_000;
+const MAIL_CHECK_INTERVAL = 120_000;
 const EVENT_DEBOUNCE = 15_000;
 const MAX_EVENT_RUNS_PER_DAY = 3;
 const MAX_RUNS = 120;
@@ -14,12 +16,15 @@ const MAX_NOTIFICATION_HISTORY = 500;
 const MAX_TIMER_DELAY = 2_147_483_647;
 const DAILY_TRIGGER = 'daily-briefing';
 const EVENT_TRIGGER = 'event-follow-up';
+const MAIL_TRIGGER = 'mail-triage';
 
 let checkTimer = null;
+let mailCheckTimer = null;
 let eventTimer = null;
 let followUpTimer = null;
 let pendingWake = '';
 let running = false;
+let mailRunning = false;
 let onUpdated = () => {};
 let onOpenAgent = () => {};
 let onAlert = () => {};
@@ -203,7 +208,7 @@ function finishRun(id, patch) {
 }
 
 function normaliseRunContext(value) {
-  const allowed = new Set(['todos', 'schedule', 'notes', 'library', 'current-time', 'goals', 'memories', 'skills']);
+  const allowed = new Set(['todos', 'schedule', 'notes', 'library', 'current-time', 'goals', 'memories', 'skills', 'mail']);
   return Array.isArray(value) ? value.filter((item) => allowed.has(item)) : [];
 }
 
@@ -287,7 +292,7 @@ function markSuggestionMessagesRead(suggestionId) {
 }
 
 function saveSuggestion(result, now, options = {}) {
-  const trigger = options.trigger === EVENT_TRIGGER ? EVENT_TRIGGER : DAILY_TRIGGER;
+  const trigger = [EVENT_TRIGGER, MAIL_TRIGGER].includes(options.trigger) ? options.trigger : DAILY_TRIGGER;
   const dateKey = localDateKey(now);
   const dedupeKey = options.dedupeKey || `${trigger}:${dateKey}`;
   const existing = store.getModule('agentSuggestions').find((suggestion) => suggestion.dedupeKey === dedupeKey);
@@ -558,6 +563,101 @@ function linkSuggestionToGoal(id, goalId) {
   return listSuggestions();
 }
 
+function getMailWatchState() {
+  const saved = store.getModule('agentMailWatch');
+  return saved && typeof saved === 'object' && !Array.isArray(saved) ? saved : {};
+}
+
+function saveMailWatchState(state) {
+  store.setModule('agentMailWatch', {
+    account: String(state?.account || '').slice(0, 320),
+    folder: String(state?.folder || '').slice(0, 240),
+    uidValidity: Number.isSafeInteger(Number(state?.uidValidity)) ? Number(state.uidValidity) : 0,
+    lastUid: Number.isSafeInteger(Number(state?.lastUid)) ? Number(state.lastUid) : 0,
+    initialized: state?.initialized === true,
+    updatedAt: new Date().toISOString(),
+  });
+}
+
+function deliverMailSuggestion(suggestion, now, notify) {
+  if (suggestion.notifiedAt || !notify) return 'in-app';
+  const settings = store.getSettings();
+  if (notifier.isWithinQuietHours(settings.notify?.quietHours, now)) return 'in-app';
+  if (availableNotificationSlots(settings, now) <= 0) return 'in-app';
+  const directMessage = { id: suggestion.messageId };
+  showDesktopNotification(suggestion, directMessage);
+  announceAlert(suggestion, directMessage, 'initial');
+  markNotified(suggestion.id, now);
+  return 'desktop-notification';
+}
+
+/**
+ * 用 IMAP UID 游标增量检查收件箱。首次启用或账号/UIDVALIDITY 改变时只建立基线，
+ * 不回溯旧信，避免一次性对历史广告和旧招聘信制造提醒。
+ */
+async function checkInbox({ now = new Date(), notify = true, mailApi = mail, triage = agent.triageIncomingMail } = {}) {
+  if (mailRunning) return [];
+  const settings = store.getSettings();
+  if (settings.agent?.proactiveEnabled === false || settings.agent?.emailMonitorEnabled !== true || !agent.getStatus(settings)) return [];
+  const account = mailApi.account();
+  if (!account?.configured || !account.user) return [];
+
+  mailRunning = true;
+  try {
+    const previous = getMailWatchState();
+    const sameAccount = previous.account === account.user && previous.initialized === true;
+    const result = await mailApi.listInboxForAgent(sameAccount ? previous.lastUid : null);
+    if (!sameAccount || result.initialized || (previous.uidValidity && result.uidValidity !== previous.uidValidity)) {
+      const baseline = result.initialized || !sameAccount
+        ? result
+        : await mailApi.listInboxForAgent(null);
+      saveMailWatchState({
+        account: account.user,
+        folder: baseline.folder,
+        uidValidity: baseline.uidValidity,
+        lastUid: baseline.nextUid,
+        initialized: true,
+      });
+      return [];
+    }
+
+    const incoming = Array.isArray(result.messages) ? result.messages : [];
+    const candidates = incoming.filter((message) => !message?.locallyFiltered);
+    const decisions = candidates.length ? await triage(settings, candidates) : [];
+    // 分诊完成（包括“均不重要”）后再推进游标；模型失败时保留游标，稍后安全重试。
+    saveMailWatchState({
+      account: account.user,
+      folder: result.folder,
+      uidValidity: result.uidValidity,
+      lastUid: result.nextUid,
+      initialized: true,
+    });
+
+    const saved = decisions.map((decision) => {
+      const source = decision.source || {};
+      const suggestion = saveSuggestion({
+        title: decision.title,
+        summary: decision.summary,
+        reason: decision.reason,
+        references: decision.references,
+        proposal: decision.proposal,
+      }, now, {
+        trigger: MAIL_TRIGGER,
+        dedupeKey: `mail:${account.user}:${result.uidValidity}:${source.folder}:${source.uid}`,
+      });
+      deliverMailSuggestion(suggestion, now, notify);
+      return suggestion;
+    });
+    if (saved.length) notifyUpdated();
+    return saved;
+  } catch (error) {
+    console.error('[proactive] 邮件智能分诊失败:', error.message);
+    return [];
+  } finally {
+    mailRunning = false;
+  }
+}
+
 function start(options = {}) {
   stop();
   onUpdated = options.onUpdated || (() => {});
@@ -566,7 +666,10 @@ function start(options = {}) {
   deliverDueFollowUps();
   scheduleFollowUpWake();
   void checkNow();
+  void checkInbox();
   checkTimer = setInterval(() => { void checkNow(); }, CHECK_INTERVAL);
+  mailCheckTimer = setInterval(() => { void checkInbox(); }, MAIL_CHECK_INTERVAL);
+  mailCheckTimer.unref?.();
   console.log('[proactive] 主动简报检查已启动（间隔 60 秒，每天最多一次）');
 }
 
@@ -574,6 +677,10 @@ function stop() {
   if (checkTimer) {
     clearInterval(checkTimer);
     checkTimer = null;
+  }
+  if (mailCheckTimer) {
+    clearInterval(mailCheckTimer);
+    mailCheckTimer = null;
   }
   if (eventTimer) {
     clearTimeout(eventTimer);
@@ -591,6 +698,7 @@ module.exports = {
   stop,
   checkNow,
   checkEventNow,
+  checkInbox,
   wake,
   notifyTodoReminder,
   listSuggestions,
@@ -651,6 +759,48 @@ if (process.env.WORKBENCH_PROACTIVE_SELF_TEST === '1') {
     assert.equal(store.getModule('agentSuggestions').find((item) => item.id === actionableSuggestion.id)?.status, 'acted');
     assert.equal(listSuggestionHistory().find((item) => item.id === actionableSuggestion.id)?.id, actionableSuggestion.id);
     assert.ok(listDirectMessages().find((message) => message.suggestionId === actionableSuggestion.id)?.readAt);
+
+    store.setSettings({
+      agent: {
+        apiBase: 'http://agent-self-test.invalid',
+        apiKey: 'test-key',
+        model: 'test-model',
+        proactiveEnabled: true,
+        emailMonitorEnabled: true,
+      },
+    });
+    let inboxStep = 0;
+    const triageInputs = [];
+    const fakeMail = {
+      account: () => ({ configured: true, user: 'me@example.com' }),
+      listInboxForAgent: async (afterUid) => {
+        if (afterUid === null) return { initialized: true, folder: 'INBOX', uidValidity: 11, nextUid: 40, messages: [] };
+        if (inboxStep === 0) return { initialized: false, folder: 'INBOX', uidValidity: 11, nextUid: 41, messages: [{ uid: 41, folder: 'INBOX', subject: '面试时间确认', locallyFiltered: false }] };
+        return { initialized: false, folder: 'INBOX', uidValidity: 11, nextUid: 42, messages: [{ uid: 42, folder: 'INBOX', subject: '会员优惠', locallyFiltered: true }] };
+      },
+    };
+    const fakeTriage = async (_settings, messages) => {
+      triageInputs.push(messages.map((message) => message.uid));
+      return [{
+        title: '需要确认面试时间',
+        summary: '招聘方邀请你确认面试时间。',
+        reason: '邮件要求在近期回复。',
+        references: [{ type: 'mail', id: 'INBOX:41', label: '面试时间确认' }],
+        proposal: { kind: 'create_todo', title: '确认面试时间', priority: 'high', due: null },
+        source: messages[0],
+      }];
+    };
+    assert.deepEqual(await checkInbox({ now: directNow, notify: false, mailApi: fakeMail, triage: fakeTriage }), []);
+    assert.equal(store.getModule('agentMailWatch').lastUid, 40);
+    const mailSuggestions = await checkInbox({ now: directNow, notify: false, mailApi: fakeMail, triage: fakeTriage });
+    assert.equal(mailSuggestions.length, 1);
+    assert.equal(mailSuggestions[0].trigger, MAIL_TRIGGER);
+    assert.equal(mailSuggestions[0].proposal?.kind, 'create_todo');
+    assert.deepEqual(triageInputs, [[41]]);
+    inboxStep = 1;
+    await checkInbox({ now: directNow, notify: false, mailApi: fakeMail, triage: fakeTriage });
+    assert.deepEqual(triageInputs, [[41]]);
+    assert.equal(store.getModule('agentMailWatch').lastUid, 42);
     updateSuggestion(actionableSuggestion.id, { status: 'unread', followUpAt: null });
     assert.equal(listSuggestions().find((item) => item.id === actionableSuggestion.id)?.id, actionableSuggestion.id);
     assert.equal(listSuggestionHistory().find((item) => item.id === actionableSuggestion.id), undefined);
@@ -755,11 +905,11 @@ if (process.env.WORKBENCH_PROACTIVE_SELF_TEST === '1') {
     store.setSettings({ agent: { proactiveEnabled: true } });
     const generated = await checkNow({ force: true, now: dailyNow, notify: true });
     assert.equal(requestCount, 2);
-    assert.equal(generated.length, 1);
-    assert.equal(generated[0].title, '优先处理方案');
-    assert.equal(generated[0].references[0].id, 'todo-1');
+    const generatedSuggestion = generated.find((suggestion) => suggestion.title === '优先处理方案');
+    assert.ok(generatedSuggestion);
+    assert.equal(generatedSuggestion.references[0].id, 'todo-1');
     assert.equal(deliveredAlerts.length, 1);
-    assert.equal(deliveredAlerts[0].messageId, generated[0].messageId);
+    assert.equal(deliveredAlerts[0].messageId, generatedSuggestion.messageId);
     assert.equal(deliveredAlerts[0].title, '优先处理方案');
     assert.equal(deliveredAlerts[0].summary, '准备方案即将到期，建议先确认今天的完成路径。');
     assert.equal(deliveredAlerts[0].phase, 'initial');

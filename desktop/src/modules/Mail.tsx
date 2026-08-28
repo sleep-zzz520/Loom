@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
+import DOMPurify from 'dompurify';
 import {
   CheckCircle2,
   CircleAlert,
@@ -7,6 +8,8 @@ import {
   LoaderCircle,
   Mail,
   Paperclip,
+  PanelLeftOpen,
+  PanelRightClose,
   PenLine,
   RefreshCw,
   Reply,
@@ -22,6 +25,7 @@ import type {
   MailConnectionStatus,
   MailFolder,
   MailMessage,
+  MailSendResult,
   MailSummary,
   MailboxResult,
 } from '../types';
@@ -134,11 +138,57 @@ function formatSize(size: number) {
   return (size / 1024 / 1024).toFixed(1) + ' MB';
 }
 
+const UNSAFE_EMAIL_ELEMENTS = 'base, embed, form, frame, frameset, iframe, input, link, meta, object, script, select, svg, textarea, video, audio, canvas';
+const SAFE_EMAIL_IMAGE_SOURCE = /^(?:https?:\/\/|data:image\/[a-z0-9.+-]+;base64,)/i;
+const FORBIDDEN_EMAIL_TAGS = ['base', 'embed', 'form', 'frame', 'frameset', 'iframe', 'input', 'link', 'meta', 'object', 'script', 'select', 'svg', 'textarea', 'video', 'audio', 'canvas'];
+
+function safeEmailDocument(html: string) {
+  const cleanHtml = DOMPurify.sanitize(html, {
+    USE_PROFILES: { html: true },
+    FORBID_TAGS: FORBIDDEN_EMAIL_TAGS,
+    FORBID_ATTR: ['target'],
+    SANITIZE_NAMED_PROPS: true,
+  });
+  const parsed = new DOMParser().parseFromString(cleanHtml, 'text/html');
+  parsed.querySelectorAll(UNSAFE_EMAIL_ELEMENTS).forEach((element) => element.remove());
+  parsed.querySelectorAll('*').forEach((element) => {
+    for (const attribute of Array.from(element.attributes)) {
+      const name = attribute.name.toLowerCase();
+      if (name.startsWith('on') || name === 'href' || name === 'target') {
+        element.removeAttribute(attribute.name);
+      } else if (name === 'src' && (element.tagName !== 'IMG' || !SAFE_EMAIL_IMAGE_SOURCE.test(attribute.value))) {
+        element.removeAttribute(attribute.name);
+      } else if (name === 'srcset' && element.tagName !== 'IMG') {
+        element.removeAttribute(attribute.name);
+      } else if (name === 'background' && !SAFE_EMAIL_IMAGE_SOURCE.test(attribute.value)) {
+        element.removeAttribute(attribute.name);
+      }
+    }
+  });
+
+  const emailHeadStyles = Array.from(parsed.head.querySelectorAll('style'))
+    .map((element) => element.outerHTML)
+    .join('');
+
+  return '<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src \'none\'; img-src https: http: data:; style-src \'unsafe-inline\' https: http:; font-src https: http: data:; media-src \'none\'; connect-src \'none\'; frame-src \'none\'; object-src \'none\'; base-uri \'none\'; form-action \'none\';"><style>html{color:#475569;background:#fff}body{margin:0;padding:0;overflow-wrap:anywhere}img{max-width:100%!important;height:auto!important}table{max-width:100%!important}pre{white-space:pre-wrap}</style>' + emailHeadStyles + '</head>' + parsed.body.outerHTML + '</html>';
+}
+
 function accountStatusText(status: MailConnectionStatus) {
   const parts: string[] = [];
   parts.push(status.imap ? 'IMAP 收信已连接' : 'IMAP 收信未连接');
   parts.push(status.smtp ? 'SMTP 发信已连接' : 'SMTP 发信未连接');
   return parts.join(' · ');
+}
+
+function sendStatusText(result: MailSendResult) {
+  const accepted = result.accepted.join('、');
+  if (result.rejected.length) {
+    return `发件服务器已接受：${accepted}；未接受：${result.rejected.join('、')}。`;
+  }
+  const deliveryNotice = result.dsnSupported
+    ? '已请求失败或延迟的投递回执。'
+    : '发件服务器不支持下游投递回执。';
+  return `发件服务器已接受收件人：${accepted}。${deliveryNotice}对方邮箱的后续投递可能仍需一点时间。`;
 }
 
 export default function MailModule() {
@@ -148,6 +198,7 @@ export default function MailModule() {
   const [activeFolder, setActiveFolder] = useState('');
   const [selectedSummary, setSelectedSummary] = useState<MailSummary | null>(null);
   const [selectedMessage, setSelectedMessage] = useState<MailMessage | null>(null);
+  const [foldersOpen, setFoldersOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [composerOpen, setComposerOpen] = useState(false);
   const [composer, setComposer] = useState<ComposerForm>(() => emptyComposer());
@@ -161,6 +212,7 @@ export default function MailModule() {
   const [messageError, setMessageError] = useState('');
   const [setupMessage, setSetupMessage] = useState('');
   const [composerError, setComposerError] = useState('');
+  const [composerStatus, setComposerStatus] = useState('');
   const requestRef = useRef(0);
 
   const refreshMailbox = useCallback(async (folder = '') => {
@@ -228,7 +280,7 @@ export default function MailModule() {
     setConnectionStatus(null);
     setSetupMessage('');
     try {
-      const result = await window.workbench.mail.verify();
+      const result = await window.workbench.mail.verify(accountForm);
       setConnectionStatus(result);
       if (result.imap && loadAfterSuccess) {
         await refreshMailbox('');
@@ -243,6 +295,7 @@ export default function MailModule() {
   async function openMessage(summary: MailSummary) {
     const currentRequest = requestRef.current + 1;
     requestRef.current = currentRequest;
+    setFoldersOpen(false);
     setSelectedSummary(summary);
     setSelectedMessage(null);
     setOpeningMessage(true);
@@ -269,6 +322,7 @@ export default function MailModule() {
   }
 
   function selectFolder(path: string) {
+    setFoldersOpen(false);
     if (path === activeFolder && mailbox) {
       void refreshMailbox(path);
       return;
@@ -279,6 +333,15 @@ export default function MailModule() {
     setSelectedMessage(null);
     setMessageError('');
     void refreshMailbox(path);
+  }
+
+  function closeReader() {
+    requestRef.current += 1;
+    setFoldersOpen(false);
+    setSelectedSummary(null);
+    setSelectedMessage(null);
+    setOpeningMessage(false);
+    setMessageError('');
   }
 
   function startReply() {
@@ -294,6 +357,7 @@ export default function MailModule() {
       inReplyTo: message.messageId || undefined,
     });
     setComposerError('');
+    setComposerStatus('');
     setComposerOpen(true);
   }
 
@@ -301,9 +365,10 @@ export default function MailModule() {
     event.preventDefault();
     setSending(true);
     setComposerError('');
+    setComposerStatus('');
     try {
-      await window.workbench.mail.send(composer);
-      setComposerOpen(false);
+      const result = await window.workbench.mail.send(composer);
+      setComposerStatus(sendStatusText(result));
       setComposer(emptyComposer());
     } catch (error) {
       setComposerError(errorText(error));
@@ -318,48 +383,7 @@ export default function MailModule() {
   const reader = selectedMessage || selectedSummary;
 
   return (
-    <section className="mail-page">
-      <header className="mail-page-header">
-        <div>
-          <span className="mail-eyebrow"><Mail size={14} />邮箱</span>
-          <h2>收件箱</h2>
-          <p>{account?.configured ? account.user : '连接任意支持 IMAP / SMTP 的邮箱后，在这里收发邮件。'}</p>
-        </div>
-        <div className="mail-page-actions">
-          {account?.configured && (
-            <button
-              type="button"
-              className="text-btn mail-header-btn"
-              onClick={() => void refreshMailbox(activeFolder)}
-              disabled={loadingMailbox}
-            >
-              <RefreshCw size={15} className={loadingMailbox ? 'is-spinning' : ''} />
-              刷新
-            </button>
-          )}
-          <button
-            type="button"
-            className="text-btn mail-header-btn"
-            onClick={() => setSettingsOpen((open) => !open)}
-          >
-            <Settings size={15} />
-            账户设置
-          </button>
-          <button
-            type="button"
-            className="btn-primary mail-compose-trigger"
-            onClick={() => {
-              setComposer(emptyComposer());
-              setComposerError('');
-              setComposerOpen(true);
-            }}
-            disabled={!account?.configured}
-          >
-            <PenLine size={16} />
-            写邮件
-          </button>
-        </div>
-      </header>
+    <section className={'mail-page' + (setupVisible ? ' is-setup-open' : '')}>
 
       {setupVisible && (
         <form className="mail-account-card" onSubmit={saveAccount}>
@@ -485,11 +509,61 @@ export default function MailModule() {
       )}
 
       {account?.configured && (
-        <div className="mail-workspace">
-          <aside className="mail-folders" aria-label="邮箱文件夹">
+        <div className={'mail-workspace' + (reader ? ' is-reading' : '') + (foldersOpen ? ' is-folders-open' : '')}>
+          <header className="mail-workspace-toolbar">
+            <div className="mail-account-summary">
+              <span className="mail-eyebrow"><Mail size={14} />邮箱</span>
+              <span>{account.user}</span>
+            </div>
+            <div className="mail-page-actions">
+              <button
+                type="button"
+                className="text-btn mail-header-btn"
+                onClick={() => void refreshMailbox(activeFolder)}
+                disabled={loadingMailbox}
+              >
+                <RefreshCw size={15} className={loadingMailbox ? 'is-spinning' : ''} />
+                刷新
+              </button>
+              <button
+                type="button"
+                className="text-btn mail-header-btn"
+                onClick={() => setSettingsOpen((open) => !open)}
+              >
+                <Settings size={15} />
+                账户设置
+              </button>
+              <button
+                type="button"
+                className="btn-primary mail-compose-trigger"
+                onClick={() => {
+                  setComposer(emptyComposer());
+                  setComposerError('');
+                  setComposerStatus('');
+                  setComposerOpen(true);
+                }}
+              >
+                <PenLine size={16} />
+                写邮件
+              </button>
+            </div>
+          </header>
+          <aside id="mail-folders" className="mail-folders" aria-label="邮箱文件夹">
             <div className="mail-folders-head">
               <span>文件夹</span>
-              {mailbox && <small>{mailbox.unseen ? mailbox.unseen + ' 未读' : '已读完'}</small>}
+              <div>
+                {mailbox && <small>{mailbox.unseen ? mailbox.unseen + ' 未读' : '已读完'}</small>}
+                {reader && (
+                  <button
+                    type="button"
+                    className="mail-folders-close"
+                    onClick={() => setFoldersOpen(false)}
+                    aria-label="关闭文件夹"
+                  >
+                    <X size={14} />
+                  </button>
+                )}
+              </div>
             </div>
             <div className="mail-folder-list">
               {folders.map((folder) => {
@@ -552,13 +626,7 @@ export default function MailModule() {
           </section>
 
           <section className="mail-reader" aria-label="邮件阅读区">
-            {!reader ? (
-              <div className="mail-reader-empty">
-                <Mail size={27} />
-                <h3>选择一封邮件</h3>
-                <p>邮件正文会在此处以纯文本安全显示。</p>
-              </div>
-            ) : (
+            {reader && (
               <>
                 <header className="mail-reader-head">
                   <div>
@@ -571,12 +639,28 @@ export default function MailModule() {
                       </div>
                     </div>
                   </div>
-                  {selectedMessage && (
-                    <button type="button" className="text-btn mail-reply-btn" onClick={startReply}>
-                      <Reply size={15} />
-                      回复
+                  <div className="mail-reader-actions">
+                    <button type="button" className="text-btn mail-reader-close" onClick={closeReader}>
+                      <PanelRightClose size={15} />
+                      收起阅读
                     </button>
-                  )}
+                    <button
+                      type="button"
+                      className="text-btn mail-folder-trigger"
+                      onClick={() => setFoldersOpen((open) => !open)}
+                      aria-controls="mail-folders"
+                      aria-expanded={foldersOpen}
+                    >
+                      <PanelLeftOpen size={15} />
+                      文件夹
+                    </button>
+                    {selectedMessage && (
+                      <button type="button" className="text-btn mail-reply-btn" onClick={startReply}>
+                        <Reply size={15} />
+                        回复
+                      </button>
+                    )}
+                  </div>
                 </header>
                 <div className="mail-reader-meta">
                   <span>{formatDateTime(reader.receivedAt || reader.date)}</span>
@@ -590,7 +674,15 @@ export default function MailModule() {
                 ) : selectedMessage ? (
                   <>
                     {selectedMessage.bodyUnavailable && <div className="mail-reader-notice"><CircleAlert size={16} />{selectedMessage.text}</div>}
-                    {!selectedMessage.bodyUnavailable && <pre className="mail-message-body">{selectedMessage.text}</pre>}
+                    {!selectedMessage.bodyUnavailable && (selectedMessage.html ? (
+                      <iframe
+                        className="mail-message-html"
+                        title="受限显示的 HTML 邮件正文"
+                        sandbox=""
+                        referrerPolicy="no-referrer"
+                        srcDoc={safeEmailDocument(selectedMessage.html)}
+                      />
+                    ) : <pre className="mail-message-body">{selectedMessage.text}</pre>)}
                     {selectedMessage.attachments.length > 0 && (
                       <div className="mail-attachments">
                         <span><Paperclip size={15} />附件 {selectedMessage.attachments.length} 个</span>
@@ -661,6 +753,7 @@ export default function MailModule() {
                 />
               </label>
               {composerError && <p className="mail-compose-error"><CircleAlert size={15} />{composerError}</p>}
+              {composerStatus && <p className="mail-compose-status"><CheckCircle2 size={15} />{composerStatus}</p>}
               <footer>
                 <span>将使用 {account?.user} 通过 SMTP 发出</span>
                 <button type="submit" className="btn-primary" disabled={sending}>

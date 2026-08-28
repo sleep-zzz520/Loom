@@ -1,28 +1,14 @@
-import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useRef, useState, type ChangeEvent, type FormEvent } from 'react';
 import type { SettingsKey } from '../App';
 import type { AppSettings, NotificationHistoryItem } from '../types';
 import { TimeField } from '../components/DateFields';
+import { AVATAR_ACCEPT, avatarUploadError } from './profileAvatar';
 
 type SettingsProps = {
   section: SettingsKey;
 };
 
 type SettingsSaveState = 'saved' | 'saving' | 'error';
-
-const SECTION_INFO: Record<SettingsKey, { title: string; description: string }> = {
-  'settings-profile': {
-    title: '个人资料',
-    description: '让 Agent 更自然地理解你的背景、习惯与偏好。',
-  },
-  'settings-notifications': {
-    title: '通知',
-    description: '管理提醒时间、免打扰时段和手机推送。',
-  },
-  'settings-config': {
-    title: '配置',
-    description: '设定 Agent 的身份与主动沟通方式，并管理模型服务连接。',
-  },
-};
 
 const SAVE_STATE_LABEL: Record<SettingsSaveState, string> = {
   saved: '✓ 已保存',
@@ -49,7 +35,9 @@ export default function Settings({ section }: SettingsProps) {
   const [history, setHistory] = useState<NotificationHistoryItem[]>([]);
   const [saveState, setSaveState] = useState<SettingsSaveState>('saved');
   const saveRevisionRef = useRef(0);
-  const sectionInfo = SECTION_INFO[section];
+  const avatarInputRef = useRef<HTMLInputElement>(null);
+  const avatarReadRevisionRef = useRef(0);
+  const [avatarError, setAvatarError] = useState('');
 
   useEffect(() => {
     Promise.all([
@@ -114,7 +102,6 @@ export default function Settings({ section }: SettingsProps) {
     if (!settings) return;
     saveRevisionRef.current += 1;
     setSaveState('saving');
-    void persistSettings(settings);
   }
 
   function toggleReminder(minutes: number) {
@@ -126,23 +113,66 @@ export default function Settings({ section }: SettingsProps) {
     if (next.length) update({ notify: { ...settings.notify, reminderMinutes: next } });
   }
 
+  function setAvatar(avatarDataUrl: string) {
+    if (!settings) return;
+    update({ profile: { ...settings.profile, avatarDataUrl } });
+    window.dispatchEvent(new CustomEvent('workbench:profile-avatar', { detail: avatarDataUrl }));
+  }
+
+  function chooseAvatar() {
+    avatarInputRef.current?.click();
+  }
+
+  function removeAvatar() {
+    avatarReadRevisionRef.current += 1;
+    setAvatarError('');
+    setAvatar('');
+  }
+
+  function handleAvatarChange(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.currentTarget.files?.[0];
+    event.currentTarget.value = '';
+    if (!file) return;
+
+    const validationError = avatarUploadError(file);
+    if (validationError) {
+      setAvatarError(validationError);
+      return;
+    }
+
+    const revision = ++avatarReadRevisionRef.current;
+    const reader = new FileReader();
+    reader.onerror = () => {
+      if (revision === avatarReadRevisionRef.current) setAvatarError('图片读取失败，请重新选择。');
+    };
+    reader.onload = () => {
+      if (revision !== avatarReadRevisionRef.current) return;
+      const avatarDataUrl = typeof reader.result === 'string' ? reader.result : '';
+      if (!avatarDataUrl.startsWith('data:image/')) {
+        setAvatarError('图片格式无法识别，请重新选择。');
+        return;
+      }
+      const image = new Image();
+      image.onerror = () => {
+        if (revision === avatarReadRevisionRef.current) setAvatarError('图片格式无法识别，请重新选择。');
+      };
+      image.onload = () => {
+        if (revision !== avatarReadRevisionRef.current) return;
+        setAvatarError('');
+        setAvatar(avatarDataUrl);
+      };
+      image.src = avatarDataUrl;
+    };
+    reader.readAsDataURL(file);
+  }
+
   return (
     <section className="module-page">
-      <form id="settings-form" className="settings-grid" onSubmit={save}>
-        <section className="settings-section" aria-labelledby="settings-form-title">
-          <header className="settings-page-header">
-            <div className="settings-page-heading">
-              <span className="settings-eyebrow">设置</span>
-              <h2 id="settings-form-title">{sectionInfo.title}</h2>
-              <p>{sectionInfo.description}</p>
-            </div>
-            <span className={`settings-save-state ${saveState}`} role="status" aria-live="polite">
-              {SAVE_STATE_LABEL[saveState]}
-            </span>
-          </header>
-          <div className="settings-section-content">
+      <form id="settings-form" className={`settings-grid settings-grid--${section}`} onSubmit={save}>
+        <section className="settings-section" data-settings-page={section} aria-label="设置内容">
+          <div key={section} className={`settings-section-content settings-section-content--${section}`}>
           {section === 'settings-profile' && <>
-          <section className="settings-subsection" aria-labelledby="profile-identity-title">
+          <section className="settings-subsection settings-subsection--identity" aria-labelledby="profile-identity-title">
             <div className="settings-subsection-head">
               <div>
                 <h3 id="profile-identity-title">个人身份</h3>
@@ -152,12 +182,19 @@ export default function Settings({ section }: SettingsProps) {
             <div className="settings-profile-identity">
               <div className="profile-avatar-card">
                 <div className="profile-avatar-preview">
-                  <div className="brand-avatar" aria-hidden="true" />
+                  <div className="brand-avatar" aria-hidden="true">
+                    {settings.profile.avatarDataUrl && <img src={settings.profile.avatarDataUrl} alt="" />}
+                  </div>
                 </div>
                 <div className="profile-avatar-copy">
                   <strong>头像</strong>
-                  <span className="profile-avatar-action" title="头像上传功能即将支持">更换头像</span>
+                  <input ref={avatarInputRef} className="profile-avatar-input" type="file" accept={AVATAR_ACCEPT} onChange={handleAvatarChange} tabIndex={-1} />
+                  <div className="profile-avatar-actions">
+                    <button type="button" className="profile-avatar-action" onClick={chooseAvatar}>{settings.profile.avatarDataUrl ? '更换头像' : '上传头像'}</button>
+                    {settings.profile.avatarDataUrl && <button type="button" className="profile-avatar-remove" onClick={removeAvatar}>移除</button>}
+                  </div>
                   <small>JPG / PNG · 最大 5MB</small>
+                  {avatarError && <span className="profile-avatar-error" role="alert">{avatarError}</span>}
                 </div>
               </div>
               <div className="settings-profile-fields">
@@ -189,7 +226,7 @@ export default function Settings({ section }: SettingsProps) {
             </div>
           </section>
 
-          <section className="settings-subsection" aria-labelledby="profile-context-title">
+          <section className="settings-subsection settings-subsection--context" aria-labelledby="profile-context-title">
             <div className="settings-subsection-head">
               <div>
                 <h3 id="profile-context-title">关于我</h3>
@@ -212,13 +249,13 @@ export default function Settings({ section }: SettingsProps) {
                 rows={2}
                 value={settings.profile.currentFocus}
                 onChange={(event) => update({ profile: { ...settings.profile, currentFocus: event.target.value } })}
-                placeholder="例如：目前正在完善个人工作台，优先处理待办、资料整理和 Agent 工作流。"
+                placeholder="例如：目前正在完善 Loom，优先处理待办、资料整理和 Agent 工作流。"
               />
               <small className="field-hint">写下当前最重要的一件事即可。</small>
             </label>
           </section>
 
-          <section className="settings-subsection" aria-labelledby="profile-agent-title">
+          <section className="settings-subsection settings-subsection--preferences" aria-labelledby="profile-agent-title">
             <div className="settings-subsection-head">
               <div>
                 <h3 id="profile-agent-title">Agent 工作方式</h3>
@@ -270,7 +307,7 @@ export default function Settings({ section }: SettingsProps) {
             </div>
           </section>
 
-          <section className="settings-subsection" aria-labelledby="profile-rules-title">
+          <section className="settings-subsection settings-subsection--rules" aria-labelledby="profile-rules-title">
             <div className="settings-subsection-head">
               <div>
                 <h3 id="profile-rules-title">长期规则</h3>
@@ -296,7 +333,7 @@ export default function Settings({ section }: SettingsProps) {
           </>}
 
           {section === 'settings-notifications' && <>
-          <fieldset className="notify-fieldset">
+          <fieldset className="notify-fieldset settings-notify-rhythm">
             <legend>截止提醒</legend>
             <p>在截止前发送桌面提醒；超期事项会额外尝试发送手机推送。</p>
             <div className="notify-checks">
@@ -361,8 +398,9 @@ export default function Settings({ section }: SettingsProps) {
             </select>
           </label>
 
-          {settings.notify.channel === 'ntfy' && (
-            <>
+          {settings.notify.channel !== 'none' && (
+            <div key={settings.notify.channel} className="settings-channel-panel" aria-live="polite">
+            {settings.notify.channel === 'ntfy' && <>
               <label className="field">
                 <span>Service URL</span>
                 <input
@@ -386,11 +424,9 @@ export default function Settings({ section }: SettingsProps) {
               <p className="settings-detail-note">
                 手机安装 ntfy App → 点右下角订阅 → 输入同一个 topic 名称 → 完成。
               </p>
-            </>
-          )}
+            </>}
 
-          {settings.notify.channel === 'bark' && (
-            <>
+            {settings.notify.channel === 'bark' && <>
               <label className="field">
                 <span>Bark 推送地址</span>
                 <input
@@ -404,7 +440,8 @@ export default function Settings({ section }: SettingsProps) {
               <p className="settings-detail-note">
                 App Store 搜索 Bark 安装 → 打开 App 复制推送地址 → 粘贴到上面输入框 → 保存后回到待办页点「测试手机推送」验证。
               </p>
-            </>
+            </>}
+            </div>
           )}
           {history.length > 0 && (
             <div className="notification-history" aria-label="最近通知">
@@ -420,7 +457,7 @@ export default function Settings({ section }: SettingsProps) {
           </>}
 
           {section === 'settings-config' && <>
-          <section className="settings-subsection" aria-labelledby="agent-persona-title">
+          <section className="settings-subsection settings-subsection--persona" aria-labelledby="agent-persona-title">
             <div className="settings-subsection-head">
               <div>
                 <h3 id="agent-persona-title">身份与沟通</h3>
@@ -490,7 +527,7 @@ export default function Settings({ section }: SettingsProps) {
               <small className="field-hint">写下希望它长期遵守的称呼、语气、协作习惯或表达偏好。</small>
             </label>
           </section>
-          <section className="settings-subsection" aria-labelledby="agent-proactive-title">
+          <section className="settings-subsection settings-subsection--proactive" aria-labelledby="agent-proactive-title">
             <div className="settings-subsection-head">
               <div>
                 <h3 id="agent-proactive-title">主动发现</h3>
@@ -510,8 +547,21 @@ export default function Settings({ section }: SettingsProps) {
               />
               <span className="settings-toggle-track" aria-hidden="true"><span /></span>
             </label>
+            <label className={`settings-toggle${settings.agent.emailMonitorEnabled ? ' is-on' : ''}`}>
+              <span className="settings-toggle-copy">
+                <strong>智能邮件提醒</strong>
+                <small>每两分钟检查新邮件；先在本地过滤营销邮件，再把少量候选摘要交给已配置的 Agent 判断。不会自动发送邮件或创建待办。</small>
+              </span>
+              <input
+                type="checkbox"
+                checked={settings.agent.emailMonitorEnabled === true}
+                onChange={(event) => update({ agent: { ...settings.agent, emailMonitorEnabled: event.target.checked } })}
+                aria-label="启用智能邮件提醒"
+              />
+              <span className="settings-toggle-track" aria-hidden="true"><span /></span>
+            </label>
           </section>
-          <section className="settings-subsection" aria-labelledby="agent-service-title">
+          <section className="settings-subsection settings-subsection--connection" aria-labelledby="agent-service-title">
             <div className="settings-subsection-head">
               <div>
                 <h3 id="agent-service-title">Agent 服务</h3>
@@ -550,25 +600,37 @@ export default function Settings({ section }: SettingsProps) {
               />
             </label>
           </section>
-          <section className="settings-subsection" aria-labelledby="music-service-title">
-            <div className="settings-subsection-head">
-              <div>
-                <h3 id="music-service-title">音乐服务</h3>
-                <p>默认使用工作台内置音乐服务，打开应用时自动启动；也可以填入自己的兼容服务。</p>
-              </div>
-            </div>
-            <label className="field">
-              <span>服务地址（高级）</span>
+          <details className="settings-advanced-section">
+            <summary>
+              <span className="settings-advanced-summary-copy">
+                <strong id="music-service-title">音乐服务</strong>
+                <small>默认使用工作台内置音乐服务；只有使用兼容服务时才需要调整。</small>
+              </span>
+              <span className="settings-advanced-label">高级</span>
+            </summary>
+            <div className="settings-advanced-content">
+              <label className="field">
+                <span>服务地址</span>
                 <input
                   value={settings.netease.apiBase}
                   onChange={(event) => update({ netease: { apiBase: event.target.value } })}
                   placeholder="http://127.0.0.1:3000"
                 />
               <small className="field-hint">保留默认地址时由工作台自动管理，不需要手动启动网页或终端服务。</small>
-            </label>
-          </section>
+              </label>
+            </div>
+          </details>
           </>}
           </div>
+          <footer className="settings-save-bar">
+            <span className={`settings-save-state ${saveState}`} role="status" aria-live="polite">
+              <span className="settings-save-state-dot" aria-hidden="true" />
+              <span>{SAVE_STATE_LABEL[saveState]}</span>
+            </span>
+            <button className="settings-save" type="submit" disabled={saveState === 'saving'}>
+              {saveState === 'saving' ? '正在保存' : '保存设置'}
+            </button>
+          </footer>
         </section>
       </form>
     </section>

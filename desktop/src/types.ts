@@ -104,6 +104,12 @@ export interface MusicLibrary {
   syncedAt: string | null;
 }
 
+export interface MusicPlaylistMutationResult {
+  playlist: MusicPlaylist;
+  tracks: MusicTrack[];
+  library: MusicLibrary;
+}
+
 export interface MusicServiceStatus {
   ready: boolean;
   embedded: boolean;
@@ -132,6 +138,7 @@ export interface AppSettings {
     role: string;
     about: string;
     currentFocus: string;
+    avatarDataUrl: string;
     responseLength: 'concise' | 'balanced' | 'detailed';
     confirmationMode: 'mutations-only' | 'always-explain';
     preferences: string[];
@@ -157,7 +164,14 @@ export interface AppSettings {
     maxDailyNotifications: number;
     importantDates: ImportantDate[];
   };
-  agent: { apiBase: string; apiKey: string; model: string; proactiveEnabled: boolean; persona: AgentPersona };
+  agent: {
+    apiBase: string;
+    apiKey: string;
+    model: string;
+    proactiveEnabled: boolean;
+    emailMonitorEnabled: boolean;
+    persona: AgentPersona;
+  };
   sync: { url: string; token: string };
 }
 
@@ -219,6 +233,7 @@ export interface MailMessage extends MailSummary {
   messageId: string | null;
   inReplyTo: string | null;
   text: string;
+  html: string;
   bodyUnavailable: boolean;
   attachments: MailAttachment[];
 }
@@ -237,6 +252,15 @@ export interface MailConnectionStatus {
   smtp: boolean;
   imapError: string;
   smtpError: string;
+}
+
+export interface MailSendResult {
+  messageId: string;
+  accepted: string[];
+  rejected: string[];
+  response: string;
+  deliveryId: string;
+  dsnSupported: boolean;
 }
 
 export interface WorkbenchData {
@@ -379,14 +403,14 @@ export interface AgentSkill {
   lastUsedAt: string | null;
 }
 
-export type AgentTrigger = 'daily-briefing' | 'event-follow-up';
+export type AgentTrigger = 'daily-briefing' | 'event-follow-up' | 'mail-triage';
 export type AgentRunStatus = 'running' | 'completed' | 'failed';
 export type AgentSuggestionStatus = 'unread' | 'read' | 'dismissed' | 'acted';
-export type AgentRunContext = 'todos' | 'schedule' | 'notes' | 'library' | 'current-time' | 'goals' | 'memories' | 'skills';
+export type AgentRunContext = 'todos' | 'schedule' | 'notes' | 'library' | 'current-time' | 'goals' | 'memories' | 'skills' | 'mail';
 export type AgentRunDelivery = 'none' | 'in-app' | 'desktop-notification';
 
 export interface AgentSuggestionReference {
-  type: 'todo' | 'schedule' | 'note' | 'library';
+  type: 'todo' | 'schedule' | 'note' | 'library' | 'mail';
   id: string;
   label: string;
 }
@@ -464,7 +488,10 @@ export type AgentProposal =
   | { kind: 'save_preference'; preference: string }
   | { kind: 'create_goal'; title: string; description: string; targetDate: string | null }
   | { kind: 'create_memory_candidate'; content: string; memoryKind: AgentMemoryKind; replacesId: string | null }
-  | { kind: 'create_skill_candidate'; name: string; description: string; instructions: string; replacesId: string | null };
+  | { kind: 'create_skill_candidate'; name: string; description: string; instructions: string; replacesId: string | null }
+  | { kind: 'send_email'; to: string; cc: string; subject: string; text: string; inReplyTo: string | null }
+  | { kind: 'add_music_to_playlist'; playlistId: number; playlistName: string; trackId: number; trackTitle: string }
+  | { kind: 'remove_music_from_playlist'; playlistId: number; playlistName: string; trackId: number; trackTitle: string };
 
 export interface AgentReply {
   content: string;
@@ -537,16 +564,18 @@ export interface WorkbenchApi {
     }>;
     syncAccount: () => Promise<MusicLibrary>;
     syncPlaylist: (id: number) => Promise<{ tracks: MusicTrack[]; library: MusicLibrary }>;
+    addToPlaylist: (playlistId: number, trackId: number) => Promise<MusicPlaylistMutationResult>;
+    removeFromPlaylist: (playlistId: number, trackId: number) => Promise<MusicPlaylistMutationResult>;
     logout: () => Promise<MusicLibrary>;
   };
   mail: {
     account: () => Promise<MailAccount>;
     saveAccount: (input: MailAccountInput) => Promise<MailAccount>;
-    verify: () => Promise<MailConnectionStatus>;
+    verify: (input?: MailAccountInput) => Promise<MailConnectionStatus>;
     list: (folder?: string, limit?: number) => Promise<MailboxResult>;
     getMessage: (folder: string, uid: number) => Promise<MailMessage>;
     markRead: (folder: string, uid: number) => Promise<{ folder: string; uid: number }>;
-    send: (input: { to: string; cc?: string; subject: string; text: string; inReplyTo?: string }) => Promise<{ messageId: string }>;
+    send: (input: { to: string; cc?: string; subject: string; text: string; inReplyTo?: string }) => Promise<MailSendResult>;
   };
   agent: {
     status: () => Promise<boolean>;

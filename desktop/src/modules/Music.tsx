@@ -1,9 +1,9 @@
 import { FormEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
-import { AudioLines, Captions, ChevronLeft, ChevronRight, CircleUserRound, Disc3, ListMusic, LogIn, LogOut, Pause, Play, RefreshCw, Search, SkipBack, SkipForward, X } from 'lucide-react';
-import type { AgentMusicCommand, MusicLibrary, MusicLyricLine, MusicTrack } from '../types';
+import { AudioLines, Bookmark, BookmarkPlus, Captions, ChevronLeft, ChevronRight, CircleAlert, CircleUserRound, Disc3, Heart, ListMusic, LogIn, LogOut, Pause, Play, RefreshCw, Search, SkipBack, SkipForward, Volume2, VolumeX, X } from 'lucide-react';
+import type { AgentMusicCommand, MusicLibrary, MusicLyricLine, MusicPlaylist, MusicTrack } from '../types';
 import { activeLyricLineIndex } from './musicLyrics';
-import { playbackWindow, upcomingTracks } from './musicPlaybackState';
+import { playbackProgress, playbackWindow, upcomingTracks } from './musicPlaybackState';
 import { resolveMusicShortcut } from './musicShortcuts';
 import { fallbackMusicThemeHue, themeHueFromPixels } from './musicTheme';
 
@@ -27,6 +27,14 @@ function formatSeconds(value: number) {
   return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
 }
 
+function progressStyle(currentTime: number, playableSeconds: number): CSSProperties {
+  const progress = playbackProgress(currentTime, playableSeconds);
+  return {
+    '--music-progress': `${progress * 100}%`,
+    '--music-progress-ratio': String(progress),
+  } as CSSProperties;
+}
+
 function formatDuration(durationMs: number | null) {
   return durationMs ? formatSeconds(durationMs / 1000) : '--:--';
 }
@@ -34,6 +42,22 @@ function formatDuration(durationMs: number | null) {
 function PlayingWave() {
   return <span className="music-playing-wave" aria-label="正在播放"><i /><i /><i /></span>;
 }
+
+function ownPlaylists(library: MusicLibrary) {
+  return library.playlists.filter((playlist) => playlist.isMine || playlist.creatorId === library.account?.userId);
+}
+
+function likedPlaylist(library: MusicLibrary) {
+  const accountName = library.account?.nickname || '';
+  const playlists = ownPlaylists(library);
+  return playlists.find((playlist) => accountName && playlist.name === `${accountName}喜欢的音乐`)
+    || playlists.find((playlist) => /喜欢的音乐$/.test(playlist.name))
+    || null;
+}
+
+type PlaylistActionKind = 'collect' | 'like';
+type PlaylistActionVisualState = { collected: boolean; liked: boolean };
+type PlaylistActionError = { trackId: number; action: PlaylistActionKind; message: string };
 
 export default function Music({
   agentCommand,
@@ -48,6 +72,8 @@ export default function Music({
   const searchInputRef = useRef<HTMLInputElement>(null);
   const musicNavRef = useRef<HTMLElement>(null);
   const lyricListRef = useRef<HTMLDivElement>(null);
+  const nowPlayingProgressRef = useRef<HTMLSpanElement>(null);
+  const compactProgressRef = useRef<HTMLSpanElement>(null);
   const lyricCache = useRef(new Map<number, MusicLyricLine[]>());
   const handledAgentCommands = useRef(new WeakSet<AgentMusicCommand>());
   const [query, setQuery] = useState('');
@@ -57,13 +83,14 @@ export default function Music({
   const moodPreviewHydrating = useRef(new Set<string>());
   const [moodPreviews, setMoodPreviews] = useState<Record<string, MusicTrack>>({});
   const [moodLoadingTitle, setMoodLoadingTitle] = useState<string | null>(null);
-  const [moodResultTitle, setMoodResultTitle] = useState('');
   const [currentTrack, setCurrentTrack] = useState<MusicTrack | null>(null);
   const [loading, setLoading] = useState(false);
   const [loadingTrackId, setLoadingTrackId] = useState<number | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
+  const [volume, setVolume] = useState(1);
+  const [isMuted, setIsMuted] = useState(false);
   const [serviceBase, setServiceBase] = useState('');
   const [serviceReady, setServiceReady] = useState(true);
   const [error, setError] = useState('');
@@ -82,7 +109,55 @@ export default function Music({
   const [lyrics, setLyrics] = useState<MusicLyricLine[]>([]);
   const [lyricsStatus, setLyricsStatus] = useState<'idle' | 'loading' | 'ready' | 'empty' | 'failed'>('idle');
   const [musicNavIndicator, setMusicNavIndicator] = useState({ left: 0, width: 0, ready: false });
+  const [playlistPickerTrack, setPlaylistPickerTrack] = useState<MusicTrack | null>(null);
+  const [playlistMutation, setPlaylistMutation] = useState<{ playlistId: number; trackId: number } | null>(null);
+  const [playlistActionStates, setPlaylistActionStates] = useState<Record<number, PlaylistActionVisualState>>({});
+  const [playlistActionError, setPlaylistActionError] = useState<PlaylistActionError | null>(null);
   const activeLyricIndex = useMemo(() => activeLyricLineIndex(lyrics, currentTime), [lyrics, currentTime]);
+  const ownedPlaylists = ownPlaylists(library);
+  const favoritePlaylist = likedPlaylist(library);
+
+  useEffect(() => {
+    if (!playlistActionError) return;
+    const timeout = window.setTimeout(() => setPlaylistActionError(null), 4800);
+    return () => window.clearTimeout(timeout);
+  }, [playlistActionError]);
+
+  function trackIsInPlaylist(trackId: number, playlistId: number) {
+    return (library.tracksByPlaylist[String(playlistId)] ?? []).some((track) => track.id === trackId);
+  }
+
+  function isTrackCollected(trackId: number) {
+    return Boolean(playlistActionStates[trackId]?.collected)
+      || ownedPlaylists.some((playlist) => trackIsInPlaylist(trackId, playlist.id));
+  }
+
+  function isTrackLiked(trackId: number) {
+    return Boolean(playlistActionStates[trackId]?.liked)
+      || Boolean(favoritePlaylist && trackIsInPlaylist(trackId, favoritePlaylist.id));
+  }
+
+  function showPlaylistActionError(trackId: number, action: PlaylistActionKind, message: string) {
+    setPlaylistActionError({
+      trackId,
+      action,
+      message: message.trim() || '添加到歌单失败，请稍后重试。',
+    });
+  }
+
+  function hasPlaylistActionError(trackId: number, action: PlaylistActionKind) {
+    return playlistActionError?.trackId === trackId && playlistActionError.action === action;
+  }
+
+  function updateProgressVisual(current: number, playableSeconds: number) {
+    const progress = playbackProgress(current, playableSeconds);
+    const percent = `${progress * 100}%`;
+    for (const control of [nowPlayingProgressRef.current, compactProgressRef.current]) {
+      if (!control) continue;
+      control.style.setProperty('--music-progress', percent);
+      control.style.setProperty('--music-progress-ratio', String(progress));
+    }
+  }
 
   useEffect(() => {
     if (isSearchOpen) searchInputRef.current?.focus();
@@ -119,6 +194,28 @@ export default function Music({
       window.removeEventListener('resize', updateIndicator);
     };
   }, [view]);
+
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio || !isPlaying || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+
+    let frame = 0;
+    const tick = () => {
+      const playableSeconds = playbackWindow(audio.duration, currentTrack?.durationMs ?? null).playableSeconds;
+      updateProgressVisual(audio.currentTime, playableSeconds);
+      if (!audio.paused) frame = window.requestAnimationFrame(tick);
+    };
+
+    tick();
+    return () => window.cancelAnimationFrame(frame);
+  }, [currentTrack?.durationMs, duration, isPlaying]);
+
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    audio.volume = volume;
+    audio.muted = isMuted;
+  }, [isMuted, volume]);
 
   function hydrateMoodPreview(mood: typeof FEATURED_MOODS[number], tracks: MusicTrack[], retried = false) {
     const first = tracks[0];
@@ -308,7 +405,6 @@ export default function Music({
     const keywords = input.trim();
     if (!keywords || loading) return;
     setQuery(keywords);
-    setMoodResultTitle('');
     setActivePlaylistId(null);
     setView('search');
     setLoading(true);
@@ -376,7 +472,6 @@ export default function Music({
     setActivePlaylistId(playlistId);
     setView('library');
     setQuery('');
-    setMoodResultTitle('');
     try {
       const cachedTracks = sourceLibrary.tracksByPlaylist[String(playlistId)];
       if (cachedTracks?.length) {
@@ -412,10 +507,13 @@ export default function Music({
     const audio = audioRef.current;
     if (!audio) return;
     audio.src = source;
+    audio.volume = volume;
+    audio.muted = isMuted;
     setCurrentTrack(track);
     void hydrateTrack(track);
     setCurrentTime(0);
     setDuration(0);
+    updateProgressVisual(0, 0);
     await audio.play();
   }
 
@@ -462,7 +560,6 @@ export default function Music({
   async function startMood(mood: typeof FEATURED_MOODS[number]) {
     if (loading || moodLoadingTitle) return;
     setMoodLoadingTitle(mood.title);
-    setMoodResultTitle(mood.title);
     setQuery(mood.query);
     setActivePlaylistId(null);
     setView('search');
@@ -516,6 +613,23 @@ export default function Music({
     return true;
   }
 
+  function changeVolume(value: number) {
+    if (!Number.isFinite(value)) return;
+    const nextVolume = Math.min(1, Math.max(0, value));
+    setVolume(nextVolume);
+    setIsMuted(false);
+    if (audioRef.current) {
+      audioRef.current.volume = nextVolume;
+      audioRef.current.muted = false;
+    }
+  }
+
+  function toggleMute() {
+    const nextMuted = !isMuted;
+    setIsMuted(nextMuted);
+    if (audioRef.current) audioRef.current.muted = nextMuted;
+  }
+
   function submit(event: FormEvent) {
     event.preventDefault();
     void search();
@@ -528,6 +642,7 @@ export default function Music({
     const nextTime = max > 0 ? Math.min(Math.max(value, 0), max) : Math.max(value, 0);
     audio.currentTime = nextTime;
     setCurrentTime(nextTime);
+    updateProgressVisual(nextTime, playbackWindow(max, currentTrack.durationMs).playableSeconds);
     return true;
   }
 
@@ -537,6 +652,77 @@ export default function Music({
     const max = Number.isFinite(audio.duration) && audio.duration > 0 ? audio.duration : duration;
     if (!Number.isFinite(max) || max <= 0) return false;
     return seek(audio.currentTime + offset);
+  }
+
+  function openPlaylistPicker(track: MusicTrack) {
+    if (!library.account) {
+      showPlaylistActionError(track.id, 'collect', '请先登录网易云音乐。');
+      setView('library');
+      return;
+    }
+    if (!ownedPlaylists.length) {
+      showPlaylistActionError(track.id, 'collect', '没有可写入的个人歌单。');
+      setView('library');
+      return;
+    }
+    setPlaylistActionError(null);
+    setPlaylistPickerTrack(track);
+  }
+
+  async function addTrackToPlaylist(track: MusicTrack, playlist: MusicPlaylist, action: PlaylistActionKind = 'collect') {
+    if (playlistMutation) return;
+    setPlaylistMutation({ playlistId: playlist.id, trackId: track.id });
+    setPlaylistActionError(null);
+    try {
+      const result = await window.workbench.music.addToPlaylist(playlist.id, track.id);
+      setLibrary(result.library);
+      if (activePlaylistId === playlist.id) setResults(result.tracks);
+      setPlaylistActionStates((current) => {
+        const previous = current[track.id] || { collected: false, liked: false };
+        return {
+          ...current,
+          [track.id]: {
+            collected: true,
+            liked: previous.liked || action === 'like' || playlist.id === favoritePlaylist?.id,
+          },
+        };
+      });
+      setPlaylistPickerTrack(null);
+    } catch (err) {
+      showPlaylistActionError(track.id, action, err instanceof Error ? err.message : '添加到歌单失败，请稍后重试。');
+    } finally {
+      setPlaylistMutation(null);
+    }
+  }
+
+  function renderTrackActions(track: MusicTrack) {
+    const pending = playlistMutation?.trackId === track.id;
+    const collected = isTrackCollected(track.id);
+    const liked = isTrackLiked(track.id);
+    return (
+      <div className="music-track-actions">
+        <button
+          type="button"
+          className={`music-track-collect${hasPlaylistActionError(track.id, 'collect') ? ' is-error' : ''}`}
+          onClick={() => openPlaylistPicker(track)}
+          disabled={Boolean(playlistMutation)}
+          aria-label={collected ? `已收藏${track.title}，打开歌单选择` : `收藏${track.title}到歌单`}
+          aria-pressed={collected}
+        >
+          {pending ? <RefreshCw size={15} className="is-spinning" /> : collected ? <Bookmark size={16} fill="currentColor" /> : <BookmarkPlus size={16} />}
+        </button>
+        <button
+          type="button"
+          className={`music-track-like${hasPlaylistActionError(track.id, 'like') ? ' is-error' : ''}`}
+          onClick={() => favoritePlaylist && void addTrackToPlaylist(track, favoritePlaylist, 'like')}
+          disabled={!favoritePlaylist || Boolean(playlistMutation)}
+          aria-label={favoritePlaylist ? `喜欢并添加到「${favoritePlaylist.name}」歌单` : '未找到喜欢的音乐歌单'}
+          aria-pressed={liked}
+        >
+          {pending ? <RefreshCw size={15} className="is-spinning" /> : <Heart size={16} fill={liked ? 'currentColor' : 'none'} />}
+        </button>
+      </div>
+    );
   }
 
   useEffect(() => {
@@ -564,20 +750,27 @@ export default function Music({
     return () => document.removeEventListener('keydown', handleShortcut);
   }, [currentTrack, duration, loadingTrackId, results]);
 
-  function renderTrackRow(track: MusicTrack) {
+  function renderTrackRow(track: MusicTrack, context: 'default' | 'library' | 'queue' = 'default', index?: number) {
     const active = currentTrack?.id === track.id;
     const trackLabel = `${track.title} · ${track.artists}${track.album ? ` · ${track.album}` : ''}`;
+    const rowStyle = context === 'queue'
+      ? { display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 64px', minHeight: 72, height: 72 }
+      : undefined;
     return (
-      <button key={track.id} type="button" className={`music-track-row has-cover${active ? ' is-active' : ''}`} onClick={() => void play(track)} disabled={loadingTrackId === track.id} title={trackLabel}>
-        <span className="music-track-art" aria-hidden="true">
-          {track.coverUrl
-            ? <img className="music-track-cover" src={track.coverUrl} alt="" />
-            : <span className="music-track-cover music-track-cover-placeholder"><AudioLines size={16} /></span>}
-          <span className="music-track-play">{loadingTrackId === track.id ? '…' : active && isPlaying ? <PlayingWave /> : <Play size={14} fill="currentColor" />}</span>
-        </span>
-        <span className="music-track-copy"><strong>{track.title}</strong><small>{track.artists}{track.album ? ` · ${track.album}` : ''}</small></span>
-        <time>{formatDuration(track.durationMs)}</time>
-      </button>
+      <div key={track.id} className={`music-track-row has-cover${active ? ' is-active' : ''}`} style={rowStyle}>
+        <button type="button" className="music-track-main" onClick={() => void play(track)} disabled={loadingTrackId === track.id} title={trackLabel}>
+          {context === 'library' && <span className="music-track-index" aria-hidden="true">{String((index ?? 0) + 1).padStart(2, '0')}</span>}
+          <span className="music-track-art" aria-hidden="true">
+            {track.coverUrl
+              ? <img className="music-track-cover" src={track.coverUrl} alt="" />
+              : <span className="music-track-cover music-track-cover-placeholder"><AudioLines size={16} /></span>}
+            <span className="music-track-play">{loadingTrackId === track.id ? '…' : active ? <PlayingWave /> : <Play size={20} fill="currentColor" />}</span>
+          </span>
+          <span className="music-track-copy"><strong>{track.title}</strong><small>{track.artists}{track.album ? ` · ${track.album}` : ''}</small></span>
+          <time>{formatDuration(track.durationMs)}</time>
+        </button>
+        {renderTrackActions(track)}
+      </div>
     );
   }
 
@@ -605,7 +798,7 @@ export default function Music({
     return (
       <aside id="music-now-page-queue" className={`music-now-page-queue${queue.length > 7 ? ' has-long-queue' : ''}`} aria-label="播放队列">
         <header className="music-now-page-queue-head"><span>接下来播放</span><div><small>{queue.length} 首</small><button type="button" onClick={() => setQueueOpen(false)} aria-label="关闭播放队列"><X size={15} /></button></div></header>
-        {queue.length ? <div className="music-track-list music-now-page-queue-list" role="region" aria-label={`接下来播放，共 ${queue.length} 首`} tabIndex={0}>{queue.map(renderTrackRow)}</div> : <p>队列里没有更多歌曲。</p>}
+        {queue.length ? <div className="music-track-list music-now-page-queue-list" role="region" aria-label={`接下来播放，共 ${queue.length} 首`} tabIndex={0}>{queue.map((track) => renderTrackRow(track, 'queue'))}</div> : <p>队列里没有更多歌曲。</p>}
       </aside>
     );
   }
@@ -618,7 +811,7 @@ export default function Music({
         <span>{isLyricsPage ? '歌词' : '播放详情'}</span>
         <div className="music-now-page-header-actions">
           <button type="button" className="music-now-page-view-switch" onClick={() => { setQueueOpen(false); setView(isLyricsPage ? 'player' : 'lyrics'); }} aria-label={isLyricsPage ? '打开封面播放页' : '打开歌词页'}>{isLyricsPage ? <Disc3 size={15} /> : <Captions size={15} />}{isLyricsPage ? '封面' : '歌词'}</button>
-          <button type="button" className="music-now-page-queue-trigger" onClick={() => setQueueOpen((open) => !open)} aria-expanded={queueOpen} aria-controls="music-now-page-queue"><ListMusic size={15} />{queueOpen ? '收起队列' : `队列 ${queue.length}`}</button>
+          <button type="button" className="music-now-page-queue-trigger" onClick={() => setQueueOpen((open) => !open)} aria-expanded={queueOpen} aria-controls="music-now-page-queue" aria-label={queueOpen ? '收起播放队列' : `打开播放队列，共 ${queue.length} 首`}><ListMusic size={15} /></button>
         </div>
       </header>
     );
@@ -752,13 +945,13 @@ export default function Music({
     return (
       <div className="music-subpage music-search-view">
         <header className="music-subpage-heading">
-          <div><button type="button" className="music-back-link" onClick={() => setView('discover')}><ChevronLeft size={15} />返回发现</button><h1>{moodResultTitle || (query ? `关于“${query}”` : '搜索结果')}</h1></div>
+          <div><button type="button" className="music-back-link" onClick={() => setView('discover')}><ChevronLeft size={15} />返回发现</button></div>
           {results.length > 0 && <span className="music-subpage-count">{results.length} 首</span>}
         </header>
         {error && <div className="music-service-alert is-error" role="alert"><span>{error}</span><button type="button" className="text-btn" onClick={onOpenSettings}>检查服务</button></div>}
         {loading && <div className="music-results-panel music-results-loading" aria-label="正在搜索">{[0, 1, 2, 3, 4].map((item) => <div key={item} className="music-skeleton-row"><span /><i /><b /><em /></div>)}</div>}
         {!loading && results.length === 0 && <div className="music-results-panel music-results-empty-state"><span className="music-empty-disc" aria-hidden="true"><AudioLines size={24} /></span><strong>还没有搜索结果</strong><span>换个关键词试试，或回到发现页听一张精选唱片。</span><button type="button" className="text-btn" onClick={() => setView('discover')}>返回发现</button></div>}
-        {!loading && results.length > 0 && <section className="music-results-panel music-track-list music-search-results-list" aria-live="polite">{results.map(renderTrackRow)}</section>}
+        {!loading && results.length > 0 && <section className="music-results-panel music-track-list music-search-results-list" aria-live="polite">{results.map((track) => renderTrackRow(track))}</section>}
       </div>
     );
   }
@@ -786,9 +979,6 @@ export default function Music({
     const selectedPlaylist = library.playlists.find((playlist) => playlist.id === activePlaylistId);
     return (
       <div className="music-subpage music-library-view">
-        <header className="music-subpage-heading music-library-heading">
-          <div><h1>我的音乐</h1></div>
-        </header>
         {libraryError && <div className="music-service-alert is-error" role="alert"><span>{libraryError}</span>{!serviceReady && <button type="button" className="text-btn" onClick={onOpenSettings}>检查服务</button>}</div>}
         {library.account ? (
           <div className="music-library-layout">
@@ -805,11 +995,11 @@ export default function Music({
               </div>
             </aside>
             <section className="music-library-tracks" aria-live="polite">
-              <div className="music-library-column-heading"><strong>{selectedPlaylist?.name || '选择一个歌单'}</strong>{results.length > 0 && <small>{results.length} 首</small>}</div>
+              <div className="music-library-column-heading"><strong>{selectedPlaylist?.name || '选择一个歌单'}</strong>{selectedPlaylist && <small>{selectedPlaylist.trackCount} 首</small>}</div>
               {!activePlaylistId && <div className="music-library-empty"><AudioLines size={23} /><strong>选择左侧歌单</strong><span>歌曲列表会在这里显示。</span></div>}
               {activePlaylistId && playlistLoadingId === activePlaylistId && <div className="music-results-loading">{[0, 1, 2, 3, 4].map((item) => <div key={item} className="music-skeleton-row"><span /><i /><b /><em /></div>)}</div>}
               {activePlaylistId && playlistLoadingId !== activePlaylistId && !results.length && <div className="music-library-empty"><AudioLines size={23} /><strong>这个歌单还没有歌曲</strong><span>可以点击上方“同步歌单”重新拉取。</span></div>}
-              {activePlaylistId && playlistLoadingId !== activePlaylistId && results.length > 0 && <div className="music-track-list music-library-track-list">{results.map(renderTrackRow)}</div>}
+              {activePlaylistId && playlistLoadingId !== activePlaylistId && results.length > 0 && <div className="music-track-list music-library-track-list">{results.map((track, index) => renderTrackRow(track, 'library', index))}</div>}
             </section>
           </div>
         ) : (
@@ -822,6 +1012,9 @@ export default function Music({
   function renderNowPlaying() {
     const queue = upcomingTracks(results, currentTrack?.id);
     const preview = playbackWindow(duration, currentTrack?.durationMs ?? null);
+    const currentTrackId = currentTrack?.id ?? null;
+    const collected = currentTrackId !== null && isTrackCollected(currentTrackId);
+    const liked = currentTrackId !== null && isTrackLiked(currentTrackId);
     return (
       <div className="music-now-page music-player-page" aria-label="播放详情">
         {renderDetailHeader('player', queue)}
@@ -845,7 +1038,11 @@ export default function Music({
                 <button type="button" className="music-now-page-toggle" onClick={togglePlayback} aria-label={isPlaying ? '暂停播放' : '播放'}>{isPlaying ? <Pause size={22} fill="currentColor" /> : <Play size={22} fill="currentColor" />}</button>
                 <button type="button" className="music-now-page-step" onClick={() => playRelative(1)} disabled={!results.length} aria-label="下一首"><SkipForward size={18} fill="currentColor" /></button>
               </div>
-              <div className="music-now-page-progress"><time>{formatSeconds(currentTime)}</time><input type="range" min="0" max={preview.playableSeconds} value={Math.min(currentTime, preview.playableSeconds)} onChange={(event) => seek(Number(event.target.value))} disabled={!preview.playableSeconds} aria-label={preview.isPreview ? `试听进度，当前试听最长 ${formatSeconds(preview.playableSeconds)}，原曲时长 ${formatSeconds(preview.catalogSeconds)}` : '播放进度'} /><time>{formatSeconds(preview.playableSeconds)}</time></div>
+              <div className="music-now-page-actions">
+                <button type="button" className={`music-now-page-add${hasPlaylistActionError(currentTrack.id, 'collect') ? ' is-error' : ''}`} onClick={() => openPlaylistPicker(currentTrack)} disabled={Boolean(playlistMutation)} aria-label={collected ? '已收藏，打开歌单选择' : '收藏到歌单'} aria-pressed={collected}>{collected ? <Bookmark size={16} fill="currentColor" /> : <BookmarkPlus size={16} />}</button>
+                <button type="button" className={`music-now-page-like${hasPlaylistActionError(currentTrack.id, 'like') ? ' is-error' : ''}`} onClick={() => favoritePlaylist && void addTrackToPlaylist(currentTrack, favoritePlaylist, 'like')} disabled={!favoritePlaylist || Boolean(playlistMutation)} aria-label={favoritePlaylist ? `喜欢并添加到「${favoritePlaylist.name}」歌单` : '未找到喜欢的音乐歌单'} aria-pressed={liked}><Heart size={15} fill={liked ? 'currentColor' : 'none'} /></button>
+              </div>
+              <div className="music-now-page-progress"><time>{formatSeconds(currentTime)}</time><span ref={nowPlayingProgressRef} className="music-progress-control" style={progressStyle(currentTime, preview.playableSeconds)}><i aria-hidden="true" /><input type="range" min="0" max={preview.playableSeconds} value={Math.min(currentTime, preview.playableSeconds)} onChange={(event) => seek(Number(event.target.value))} disabled={!preview.playableSeconds} aria-label={preview.isPreview ? `试听进度，当前试听最长 ${formatSeconds(preview.playableSeconds)}，原曲时长 ${formatSeconds(preview.catalogSeconds)}` : '播放进度'} /></span><time>{formatSeconds(preview.playableSeconds)}</time></div>
             </section>
             {queueOpen && renderQueuePanel(queue)}
           </div>
@@ -888,6 +1085,35 @@ export default function Music({
     );
   }
 
+  function renderPlaylistPicker() {
+    const track = playlistPickerTrack;
+    if (!track) return null;
+    return (
+      <div className="music-playlist-picker-layer" role="dialog" aria-modal="true" aria-labelledby="music-playlist-picker-title">
+        <button type="button" className="music-playlist-picker-backdrop" onClick={() => setPlaylistPickerTrack(null)} aria-label="关闭歌单选择" />
+        <section className="music-playlist-picker">
+          <header>
+            <div><span>收藏到歌单</span><h2 id="music-playlist-picker-title">{track.title}</h2><p>选择要收藏到的网易云个人歌单</p></div>
+            <button type="button" onClick={() => setPlaylistPickerTrack(null)} aria-label="关闭歌单选择"><X size={17} /></button>
+          </header>
+          <div className="music-playlist-picker-list">
+            {ownedPlaylists.map((playlist) => {
+              const pending = playlistMutation?.playlistId === playlist.id && playlistMutation.trackId === track.id;
+              return (
+                <button key={playlist.id} type="button" onClick={() => void addTrackToPlaylist(track, playlist)} disabled={Boolean(playlistMutation)}>
+                  {playlist.coverUrl ? <img src={playlist.coverUrl.replace(/^http:/, 'https:')} alt="" /> : <span className="music-playlist-picker-cover"><ListMusic size={16} /></span>}
+                  <span><strong>{playlist.name}</strong><small>{playlist.trackCount} 首</small></span>
+                  {pending ? <RefreshCw size={16} className="is-spinning" /> : <BookmarkPlus size={16} />}
+                </button>
+              );
+            })}
+          </div>
+          {playlistActionError?.trackId === track.id && playlistActionError.action === 'collect' && <div className="music-playlist-picker-error" role="alert"><CircleAlert size={15} aria-hidden="true" /><span>{playlistActionError.message}</span></div>}
+        </section>
+      </div>
+    );
+  }
+
   const compactPlayback = playbackWindow(duration, currentTrack?.durationMs ?? null);
 
   return (
@@ -895,10 +1121,21 @@ export default function Music({
       <audio
         ref={audioRef}
         onPlay={() => setIsPlaying(true)}
-        onPause={() => setIsPlaying(false)}
+        onPause={(event) => {
+          setIsPlaying(false);
+          updateProgressVisual(event.currentTarget.currentTime, playbackWindow(event.currentTarget.duration, currentTrack?.durationMs ?? null).playableSeconds);
+        }}
         onEnded={() => playRelative(1)}
-        onTimeUpdate={(event) => setCurrentTime(event.currentTarget.currentTime)}
-        onLoadedMetadata={(event) => setDuration(Number.isFinite(event.currentTarget.duration) ? event.currentTarget.duration : 0)}
+        onTimeUpdate={(event) => {
+          const nextTime = event.currentTarget.currentTime;
+          setCurrentTime(nextTime);
+          updateProgressVisual(nextTime, playbackWindow(event.currentTarget.duration, currentTrack?.durationMs ?? null).playableSeconds);
+        }}
+        onLoadedMetadata={(event) => {
+          const nextDuration = Number.isFinite(event.currentTarget.duration) ? event.currentTarget.duration : 0;
+          setDuration(nextDuration);
+          updateProgressVisual(event.currentTarget.currentTime, playbackWindow(nextDuration, currentTrack?.durationMs ?? null).playableSeconds);
+        }}
         onError={() => setError('音频加载失败，这首歌可能受版权或服务限制。')}
       />
       <div className="music-shell">
@@ -912,10 +1149,14 @@ export default function Music({
         </main>
       </div>
       {renderLoginModal()}
+      {renderPlaylistPicker()}
+      {playlistActionError && (!playlistPickerTrack || playlistActionError.trackId !== playlistPickerTrack.id) && <div className="music-action-feedback" role="alert"><CircleAlert size={15} aria-hidden="true" /><span>{playlistActionError.message}</span><button type="button" onClick={() => setPlaylistActionError(null)} aria-label="关闭提示"><X size={14} /></button></div>}
       {view !== 'player' && view !== 'lyrics' && <footer className="music-player" aria-label="迷你播放器">
         <button type="button" className="music-player-track" onClick={() => { setQueueOpen(false); setView('player'); }} aria-label={currentTrack ? '点击封面打开正在播放页面' : '打开播放页面'} title={currentTrack ? '点击封面打开正在播放页面' : '打开播放页面'}>
-          {currentTrack?.coverUrl ? <img src={currentTrack.coverUrl} alt="" /> : <span className="music-player-cover"><AudioLines size={18} /></span>}
-          <div><strong>{currentTrack?.title || '尚未选择歌曲'}</strong>{currentTrack && <small>{currentTrack.artists}{compactPlayback.isPreview && <em className="music-player-preview">试听</em>}</small>}</div>
+          <span className={`music-player-disc${currentTrack?.coverUrl ? ' has-cover' : ''}`} aria-hidden="true">
+            {currentTrack?.coverUrl ? <img src={currentTrack.coverUrl} alt="" /> : <span className="music-player-disc-core"><AudioLines size={17} /></span>}
+          </span>
+          {currentTrack && <div><strong>{currentTrack.title}</strong><small>{currentTrack.artists}{compactPlayback.isPreview && <em className="music-player-preview">试听</em>}</small></div>}
         </button>
         <div className="music-player-center">
           <div className="music-player-controls">
@@ -923,10 +1164,21 @@ export default function Music({
             <button type="button" className="music-player-toggle" onClick={togglePlayback} disabled={!currentTrack} aria-label={isPlaying ? '暂停播放' : '播放'}>{isPlaying ? <Pause size={18} fill="currentColor" /> : <Play size={18} fill="currentColor" />}</button>
             <button type="button" className="music-player-step" onClick={() => playRelative(1)} disabled={!results.length} aria-label="下一首"><SkipForward size={16} fill="currentColor" /></button>
           </div>
-          <div className="music-progress"><time>{formatSeconds(currentTime)}</time><input type="range" min="0" max={compactPlayback.playableSeconds} value={Math.min(currentTime, compactPlayback.playableSeconds)} onChange={(event) => seek(Number(event.target.value))} disabled={!currentTrack || !compactPlayback.playableSeconds} aria-label={compactPlayback.isPreview ? `试听进度，最长 ${formatSeconds(compactPlayback.playableSeconds)}` : '播放进度'} /><time>{formatSeconds(compactPlayback.playableSeconds)}</time></div>
+          <div className="music-progress"><time>{formatSeconds(currentTime)}</time><span ref={compactProgressRef} className="music-progress-control" style={progressStyle(currentTime, compactPlayback.playableSeconds)}><i aria-hidden="true" /><input type="range" min="0" max={compactPlayback.playableSeconds} value={Math.min(currentTime, compactPlayback.playableSeconds)} onChange={(event) => seek(Number(event.target.value))} disabled={!currentTrack || !compactPlayback.playableSeconds} aria-label={compactPlayback.isPreview ? `试听进度，最长 ${formatSeconds(compactPlayback.playableSeconds)}` : '播放进度'} /></span><time>{formatSeconds(compactPlayback.playableSeconds)}</time></div>
         </div>
         <div className="music-player-meta">
-          <button type="button" className="music-player-queue-link" onClick={() => { setQueueOpen(true); setView('player'); }}><ListMusic size={16} />{results.length ? `队列 ${results.length}` : '队列'}</button>
+          <div className="music-player-audio-actions">
+            <div className="music-player-collection-actions">
+              <button type="button" className={`music-player-collect${currentTrack && hasPlaylistActionError(currentTrack.id, 'collect') ? ' is-error' : ''}`} onClick={() => currentTrack && openPlaylistPicker(currentTrack)} disabled={!currentTrack || Boolean(playlistMutation)} aria-label={currentTrack && isTrackCollected(currentTrack.id) ? '已收藏，打开歌单选择' : '收藏到歌单'} aria-pressed={currentTrack ? isTrackCollected(currentTrack.id) : false}>{currentTrack && isTrackCollected(currentTrack.id) ? <Bookmark size={17} fill="currentColor" /> : <BookmarkPlus size={17} />}</button>
+              <button type="button" className={`music-player-like${currentTrack && hasPlaylistActionError(currentTrack.id, 'like') ? ' is-error' : ''}`} onClick={() => favoritePlaylist && currentTrack && void addTrackToPlaylist(currentTrack, favoritePlaylist, 'like')} disabled={!currentTrack || !favoritePlaylist || Boolean(playlistMutation)} aria-label={favoritePlaylist ? `喜欢并添加到「${favoritePlaylist.name}」歌单` : '未找到喜欢的音乐歌单'} aria-pressed={currentTrack ? isTrackLiked(currentTrack.id) : false}><Heart size={15} fill={currentTrack && isTrackLiked(currentTrack.id) ? 'currentColor' : 'none'} /></button>
+            </div>
+            <button type="button" className="music-player-volume-toggle" onClick={toggleMute} aria-label={isMuted || volume === 0 ? '打开声音' : '静音'}>{isMuted || volume === 0 ? <VolumeX size={16} /> : <Volume2 size={16} />}</button>
+            <label className="music-player-volume-slider">
+              <span className="sr-only">音量</span>
+              <input type="range" min="0" max="1" step="0.01" value={isMuted ? 0 : volume} onChange={(event) => changeVolume(Number(event.target.value))} aria-label={`音量 ${Math.round((isMuted ? 0 : volume) * 100)}%`} style={{ '--music-volume': `${(isMuted ? 0 : volume) * 100}%` } as CSSProperties} />
+            </label>
+            <button type="button" className="music-player-queue-link" onClick={() => { setQueueOpen(true); setView('player'); }} aria-label={results.length ? `打开播放队列，共 ${results.length} 首` : '打开播放队列'}><ListMusic size={17} /></button>
+          </div>
         </div>
       </footer>}
     </section>

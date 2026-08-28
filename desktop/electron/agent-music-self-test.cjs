@@ -74,6 +74,12 @@ void (async () => {
   const unknown = await executeMusicTool('play_music', { id: 99 }, {}, state, musicApi);
   assert.match(unknown.toolResult.error, /请先通过 search_music/);
 
+  const addProposal = await executeMusicTool('prepare_add_music_to_playlist', { playlistId: 100, id: 42 }, {}, state, musicApi, {});
+  assert.equal(addProposal.proposal.kind, 'add_music_to_playlist');
+  assert.equal(addProposal.proposal.trackTitle, '自检歌曲');
+  const missingPlaylistProposal = await executeMusicTool('prepare_add_music_to_playlist', { playlistId: 999, id: 42 }, {}, state, musicApi, {});
+  assert.match(missingPlaylistProposal.toolResult.error, /未找到该歌单/);
+
   const musicLibrary = await executeMusicTool('get_music_library', {}, {}, state, musicApi, {});
   assert.equal(musicLibrary.toolResult.account.nickname, '自检听众');
   assert.equal(musicLibrary.toolResult.playlists.find((playlist) => playlist.id === 100)?.cachedTrackCount, 1);

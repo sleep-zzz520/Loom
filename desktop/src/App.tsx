@@ -107,6 +107,7 @@ function ProactiveAlertToast({
 
 export default function App() {
   const [active, setActive] = useState<ModuleKey | SettingsKey>('todos');
+  const [clockNow, setClockNow] = useState(() => new Date());
   const [musicCommand, setMusicCommand] = useState<AgentMusicCommand | null>(null);
   const [agentOpenMessageId, setAgentOpenMessageId] = useState('');
   const [proactiveAlert, setProactiveAlert] = useState<AgentProactiveAlert | null>(null);
@@ -125,18 +126,49 @@ export default function App() {
   const [categoryDeleteDestination, setCategoryDeleteDestination] = useState('');
   const [deletingCategory, setDeletingCategory] = useState(false);
   const [categoryDeleteError, setCategoryDeleteError] = useState('');
-  const [appName, setAppName] = useState('个人工作台');
+  const [appName, setAppName] = useState('Loom');
+  const [avatarDataUrl, setAvatarDataUrl] = useState('');
   const today = new Intl.DateTimeFormat('zh-CN', {
     month: 'long',
     day: 'numeric',
     weekday: 'short',
-  }).format(new Date());
+  }).format(clockNow);
+  const currentTime = `${String(clockNow.getHours()).padStart(2, '0')}:${String(clockNow.getMinutes()).padStart(2, '0')}`;
+
+  useEffect(() => {
+    let timerId: number;
+    const refreshClock = () => {
+      setClockNow(new Date());
+      timerId = window.setTimeout(refreshClock, 60_000 - (Date.now() % 60_000));
+    };
+
+    refreshClock();
+    return () => window.clearTimeout(timerId);
+  }, []);
 
   useEffect(() => {
     window.workbench
       .appInfo()
       .then((info) => setAppName(info.name))
       .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    let disposed = false;
+    void window.workbench.data.getSettings()
+      .then((settings) => {
+        if (!disposed) setAvatarDataUrl(settings.profile.avatarDataUrl || '');
+      })
+      .catch(() => {});
+    const handleAvatarUpdated = (event: Event) => {
+      const next = (event as CustomEvent<unknown>).detail;
+      setAvatarDataUrl(typeof next === 'string' ? next : '');
+    };
+    window.addEventListener('workbench:profile-avatar', handleAvatarUpdated);
+    return () => {
+      disposed = true;
+      window.removeEventListener('workbench:profile-avatar', handleAvatarUpdated);
+    };
   }, []);
 
   useEffect(() => {
@@ -300,7 +332,7 @@ export default function App() {
     <div className="app-shell" style={shellStyle}>
       <aside className={`sidebar${sidebarCollapsed ? ' compact' : ''}`}>
         <div className="brand">
-          <div className="brand-avatar" aria-hidden="true" />
+          <div className="brand-avatar" aria-hidden="true">{avatarDataUrl && <img src={avatarDataUrl} alt="" />}</div>
           <div className="brand-copy">
             <h1>{appName}</h1>
           </div>
@@ -409,7 +441,10 @@ export default function App() {
             )}
           </div>
         </nav>
-        <div className="sidebar-foot">{today}</div>
+        <div className="sidebar-foot" aria-label={`当前时间 ${currentTime}，${today}`}>
+          <time className="sidebar-clock" dateTime={currentTime}>{currentTime}</time>
+          <span className="sidebar-date">{today}</span>
+        </div>
       </aside>
       <div
         className={`pane-resizer${resizingSidebar ? ' is-dragging' : ''}`}
@@ -422,7 +457,7 @@ export default function App() {
           setResizingSidebar(true);
         }}
       />
-      <main className={`content${active === 'agent' ? ' content-agent' : ''}`}>
+      <main className={`content${active === 'agent' ? ' content-agent' : ''}${active === 'mail' ? ' content-mail' : ''}`}>
         {active === 'todos' ? (
           <Todos />
         ) : active === 'calendar' ? (

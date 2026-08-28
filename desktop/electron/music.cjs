@@ -186,18 +186,23 @@ function normaliseAccount(payload) {
   };
 }
 
-function normalisePlaylist(playlist) {
+function normalisePlaylist(playlist, accountUserId = null) {
   const id = Number(playlist?.id);
   if (!Number.isFinite(id) || id <= 0) return null;
-  const creator = playlist.creator || playlist.creatorInfo || {};
+  const creator = playlist.creator || playlist.creatorInfo || { userId: playlist.creatorId, id: playlist.creatorId, nickname: playlist.creatorName, name: playlist.creatorName };
+  const ownerId = Number(playlist.userId || creator.userId || creator.id || playlist.creatorId);
+  const creatorId = Number(creator.userId || creator.id || playlist.creatorId);
   return {
     id,
     name: safeText(playlist.name, 180) || '未命名歌单',
     coverUrl: safeText(playlist.coverImgUrl || playlist.picUrl || playlist.coverUrl, 1000) || null,
     trackCount: Number.isFinite(Number(playlist.trackCount)) ? Number(playlist.trackCount) : 0,
     creatorName: safeText(creator.nickname || creator.name, 120),
-    creatorId: Number.isFinite(Number(creator.userId || creator.id)) ? Number(creator.userId || creator.id) : null,
-    isMine: Boolean(playlist.userId && Number(playlist.userId) === Number(creator.userId || creator.id)),
+    creatorId: Number.isFinite(creatorId) && creatorId > 0 ? creatorId : null,
+    isMine: Boolean(playlist.isMine)
+      || (Number.isFinite(accountUserId) && accountUserId > 0 && (ownerId === accountUserId || creatorId === accountUserId))
+      // 网易云“我的歌单”接口把收藏歌单标为 subscribed；缺少 creator 字段时，未收藏的条目仍属于当前账号。
+      || playlist.subscribed === false,
     subscribed: Boolean(playlist.subscribed),
   };
 }
@@ -205,15 +210,19 @@ function normalisePlaylist(playlist) {
 function normaliseLibrary(value) {
   const base = emptyLibrary();
   if (!value || typeof value !== 'object' || Array.isArray(value)) return base;
-  const playlists = Array.isArray(value.playlists) ? value.playlists.map(normalisePlaylist).filter(Boolean) : [];
-  const tracksByPlaylist = value.tracksByPlaylist && typeof value.tracksByPlaylist === 'object' ? value.tracksByPlaylist : {};
+  const account = normaliseAccount({ profile: value.account }) || null;
+  const playlists = Array.isArray(value.playlists)
+    ? value.playlists.map((playlist) => normalisePlaylist(playlist, account?.userId)).filter(Boolean)
+    : [];
+  const rawTracksByPlaylist = value.tracksByPlaylist && typeof value.tracksByPlaylist === 'object' ? value.tracksByPlaylist : {};
+  const tracksByPlaylist = Object.fromEntries(Object.entries(rawTracksByPlaylist).map(([id, tracks]) => [
+    id,
+    Array.isArray(tracks) ? tracks.map(normaliseTrack).filter(Boolean) : [],
+  ]));
   return {
-    account: normaliseAccount({ profile: value.account }) || null,
+    account,
     playlists,
-    tracksByPlaylist: Object.fromEntries(Object.entries(tracksByPlaylist).map(([id, tracks]) => [
-      id,
-      Array.isArray(tracks) ? tracks.map(normaliseTrack).filter(Boolean) : [],
-    ])),
+    tracksByPlaylist,
     selectedPlaylistId: Number.isFinite(Number(value.selectedPlaylistId)) ? Number(value.selectedPlaylistId) : null,
     syncedAt: safeText(value.syncedAt, 80) || null,
   };
@@ -256,7 +265,7 @@ async function fetchPlaylists(settings, userId, cookie, options = {}) {
   }, { ...options, cookie });
   const playlists = Array.isArray(payload?.playlist) ? payload.playlist : Array.isArray(payload?.data?.playlist) ? payload.data.playlist : [];
   const seen = new Set();
-  return playlists.map(normalisePlaylist).filter((playlist) => {
+  return playlists.map((playlist) => normalisePlaylist(playlist, userId)).filter((playlist) => {
     if (!playlist || seen.has(playlist.id)) return false;
     seen.add(playlist.id);
     return true;
@@ -353,7 +362,8 @@ async function syncAccount(settings, storage, options = {}) {
   const playlists = await fetchPlaylists(settings, account.userId, cookie, options);
   const previous = readLibrary(storage);
   const playlistIds = new Set(playlists.map((playlist) => String(playlist.id)));
-  const tracksByPlaylist = Object.fromEntries(Object.entries(previous.tracksByPlaylist).filter(([id]) => playlistIds.has(id)));
+  // 歌单目录同步后，旧曲目缓存不再可靠；下一次打开歌单必须重新拉取，避免只更新总数而继续展示旧列表。
+  const tracksByPlaylist = {};
   const selectedPlaylistId = playlistIds.has(String(previous.selectedPlaylistId))
     ? previous.selectedPlaylistId
     : playlists[0]?.id || null;
@@ -380,6 +390,49 @@ async function syncPlaylistTracks(playlistId, settings, storage, options = {}) {
     syncedAt: new Date().toISOString(),
   });
   return { tracks, library };
+}
+
+function isOwnedPlaylist(playlist, account) {
+  return Boolean(playlist?.isMine)
+    || (Number.isFinite(Number(playlist?.creatorId)) && Number(playlist.creatorId) === Number(account?.userId));
+}
+
+async function mutatePlaylistTracks(playlistId, trackId, operation, settings, storage, options = {}) {
+  const id = Number(playlistId);
+  const songId = Number(trackId);
+  if (!Number.isFinite(id) || id <= 0) throw new Error('歌单标识无效');
+  if (!Number.isFinite(songId) || songId <= 0) throw new Error('歌曲标识无效');
+  if (!['add', 'del'].includes(operation)) throw new Error('歌单操作无效');
+
+  const cookie = safeText(options.cookie, 20000) || readSession();
+  if (!cookie) throw new Error('请先扫码登录网易云音乐');
+
+  // 先刷新目录，避免用本地过期的歌单权限去写入第三方账号。
+  const libraryBefore = await syncAccount(settings, storage, { ...options, cookie });
+  const playlist = libraryBefore.playlists.find((item) => Number(item.id) === id);
+  if (!playlist) throw new Error('未找到该歌单，请先同步网易云歌单');
+  if (!isOwnedPlaylist(playlist, libraryBefore.account)) throw new Error('只能修改你自己创建的歌单');
+
+  await request(settings, '/playlist/tracks', {
+    op: operation,
+    pid: id,
+    tracks: songId,
+    timestamp: Date.now(),
+  }, { ...options, cookie });
+
+  // 写入成功后立刻重新拉取，缓存不会把“已同步”误报为仅本地更新。
+  await syncAccount(settings, storage, { ...options, cookie });
+  const refreshed = await syncPlaylistTracks(id, settings, storage, { ...options, cookie });
+  const updatedPlaylist = refreshed.library.playlists.find((item) => Number(item.id) === id) || playlist;
+  return { playlist: updatedPlaylist, tracks: refreshed.tracks, library: refreshed.library };
+}
+
+function addToPlaylist(playlistId, trackId, settings, storage, options = {}) {
+  return mutatePlaylistTracks(playlistId, trackId, 'add', settings, storage, options);
+}
+
+function removeFromPlaylist(playlistId, trackId, settings, storage, options = {}) {
+  return mutatePlaylistTracks(playlistId, trackId, 'del', settings, storage, options);
 }
 
 async function logout(settings, storage, options = {}) {
@@ -447,16 +500,19 @@ async function lyrics(id, settings, options = {}) {
 async function playbackUrl(id, settings, options = {}) {
   const trackId = Number(id);
   if (!Number.isFinite(trackId) || trackId <= 0) throw new Error('歌曲标识无效');
+  // 播放地址也必须带上扫码登录后的会话；否则服务会按匿名账号返回试听音频。
+  const cookie = safeText(options.cookie, 20000) || readSession();
+  const requestOptions = cookie ? { ...options, cookie } : options;
   let firstError;
   try {
-    const modern = await request(settings, '/song/url/v1', { id: trackId, level: 'standard' }, options);
+    const modern = await request(settings, '/song/url/v1', { id: trackId, level: 'standard' }, requestOptions);
     const modernUrl = playbackUrlFromResponse(modern);
     if (modernUrl) return modernUrl;
   } catch (error) {
     firstError = error;
   }
   try {
-    const legacy = await request(settings, '/song/url', { id: trackId, br: 128000 }, options);
+    const legacy = await request(settings, '/song/url', { id: trackId, br: 128000 }, requestOptions);
     const legacyUrl = playbackUrlFromResponse(legacy);
     if (legacyUrl) return legacyUrl;
   } catch (error) {
@@ -480,6 +536,8 @@ module.exports = {
   checkQrLogin,
   syncAccount,
   syncPlaylistTracks,
+  addToPlaylist,
+  removeFromPlaylist,
   logout,
   search,
   hotSearch,

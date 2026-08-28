@@ -175,8 +175,8 @@ export default function Todos() {
   async function testPhonePush() {
     try {
       await window.workbench.notify.sendNtfy(
-        '个人工作台测试',
-        '这是一条来自个人工作台的测试推送'
+        'Loom 测试',
+        '这是一条来自 Loom 的测试推送'
       );
       setNotifyMsg('手机推送已发送，请检查手机');
     } catch {

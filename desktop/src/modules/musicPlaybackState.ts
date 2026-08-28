@@ -12,6 +12,12 @@ export function playbackWindow(playableDuration: number, catalogDurationMs: numb
   };
 }
 
+/** 供播放进度视觉层使用的 0-1 安全比例。 */
+export function playbackProgress(currentTime: number, playableSeconds: number) {
+  if (!Number.isFinite(currentTime) || !Number.isFinite(playableSeconds) || playableSeconds <= 0) return 0;
+  return Math.min(1, Math.max(0, currentTime / playableSeconds));
+}
+
 /** 将当前曲目移出“接下来播放”，并按循环播放顺序排列剩余曲目。 */
 export function upcomingTracks(tracks: MusicTrack[], currentTrackId: number | undefined) {
   const currentIndex = tracks.findIndex((track) => track.id === currentTrackId);

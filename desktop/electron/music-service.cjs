@@ -81,7 +81,6 @@ async function start(settings = {}) {
       base: DEFAULT_BASE,
       error: '',
     };
-    console.log(`[music-service] 内置音乐服务已启动：${DEFAULT_BASE}`);
   } catch (error) {
     if (candidate && !candidate.listening) candidate.close();
     if (error?.code === 'EADDRINUSE' && await probeExistingService(DEFAULT_BASE)) {
@@ -91,7 +90,6 @@ async function start(settings = {}) {
         base: DEFAULT_BASE,
         error: '',
       };
-      console.log(`[music-service] 复用已运行的音乐服务：${DEFAULT_BASE}`);
       return { ...status };
     }
     const detail = error?.code === 'EADDRINUSE'
@@ -103,7 +101,6 @@ async function start(settings = {}) {
       base: DEFAULT_BASE,
       error: `内置音乐服务启动失败：${detail}`,
     };
-    console.error(`[music-service] ${status.error}`);
   }
   return { ...status };
 }

@@ -47,7 +47,7 @@ function createWindow() {
     height: 820,
     minWidth: 960,
     minHeight: 640,
-    title: '个人工作台',
+    title: 'Loom',
     backgroundColor: '#0d1117',
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
@@ -63,9 +63,7 @@ function createWindow() {
   win.webContents.on('did-fail-load', (_event, code, description) => {
     console.error(`[main] did-fail-load ${code}: ${description}`);
   });
-  win.webContents.on('console-message', (details) => {
-    console.log(`[renderer:${details.level}] ${details.message} (${details.sourceId}:${details.lineNumber})`);
-  });
+  // 渲染器控制台日志在开发终端已关闭时会写入失效管道并触发 EPIPE；不把诊断输出绑定到主进程稳定性。
   if (isDev) {
     win.loadURL(process.env.VITE_DEV_SERVER_URL);
   } else {
@@ -130,13 +128,17 @@ function withoutEmailPassword(patch) {
 
 function registerIpc() {
   ipcMain.handle('app:info', () => ({
-    name: '个人工作台',
+    name: 'Loom',
     version: app.getVersion(),
     platform: process.platform,
   }));
   ipcMain.handle('data:get', () => publicData());
   ipcMain.handle('data:get-settings', () => publicSettings(store.getSettings()));
-  ipcMain.handle('data:set-settings', (_event, patch) => publicSettings(store.setSettings(withoutEmailPassword(patch))));
+  ipcMain.handle('data:set-settings', (_event, patch) => {
+    const settings = store.setSettings(withoutEmailPassword(patch));
+    if (patch?.agent && Object.hasOwn(patch.agent, 'emailMonitorEnabled')) void proactive.checkInbox();
+    return publicSettings(settings);
+  });
   ipcMain.handle('data:get-module', (_event, name) => store.getModule(name));
   ipcMain.handle('data:set-module', (_event, name, items) => {
     const result = store.setModule(name, items);
@@ -221,10 +223,16 @@ function registerIpc() {
   ipcMain.handle('music:qr-check', (_event, key) => music.checkQrLogin(key, getMusicSettings(), store));
   ipcMain.handle('music:sync-account', () => music.syncAccount(getMusicSettings(), store));
   ipcMain.handle('music:sync-playlist', (_event, id) => music.syncPlaylistTracks(id, getMusicSettings(), store));
+  ipcMain.handle('music:add-to-playlist', (_event, playlistId, trackId) => music.addToPlaylist(playlistId, trackId, getMusicSettings(), store));
+  ipcMain.handle('music:remove-from-playlist', (_event, playlistId, trackId) => music.removeFromPlaylist(playlistId, trackId, getMusicSettings(), store));
   ipcMain.handle('music:logout', () => music.logout(getMusicSettings(), store));
   ipcMain.handle('mail:account', () => mail.account());
-  ipcMain.handle('mail:save-account', (_event, input) => mail.saveAccount(input));
-  ipcMain.handle('mail:verify', () => mail.verifyConnection());
+  ipcMain.handle('mail:save-account', (_event, input) => {
+    const saved = mail.saveAccount(input);
+    void proactive.checkInbox();
+    return saved;
+  });
+  ipcMain.handle('mail:verify', (_event, input) => mail.verifyConnection(input));
   ipcMain.handle('mail:list', (_event, folder, limit) => mail.listMailbox(folder, limit));
   ipcMain.handle('mail:get-message', (_event, folder, uid) => mail.getMessage(folder, uid));
   ipcMain.handle('mail:mark-read', (_event, folder, uid) => mail.markRead(folder, uid));
@@ -238,10 +246,30 @@ function registerIpc() {
       musicState: agentMusicState,
     })
   );
-  ipcMain.handle('agent:confirm-proposal', (_event, proposal) => {
-    const result = agent.confirmProposal(proposal);
+  ipcMain.handle('agent:confirm-proposal', async (_event, proposal) => {
+    const musicProposal = agent.normaliseMusicProposal(proposal);
+    const emailProposal = agent.normaliseEmailProposal(proposal);
+    const result = musicProposal
+      ? await (musicProposal.kind === 'add_music_to_playlist'
+        ? music.addToPlaylist(musicProposal.playlistId, musicProposal.trackId, getMusicSettings(), store)
+        : music.removeFromPlaylist(musicProposal.playlistId, musicProposal.trackId, getMusicSettings(), store))
+      : emailProposal
+        ? await mail.sendMessage(emailProposal)
+      : agent.confirmProposal(proposal);
     notifyAgentStateChanged();
-    return result;
+    if (emailProposal) {
+      const accepted = result.accepted?.join('、') || emailProposal.to;
+      const rejected = result.rejected?.length ? `；未被发件服务器接受：${result.rejected.join('、')}` : '';
+      const deliveryNotice = result.dsnSupported
+        ? '已请求失败或延迟的投递回执。'
+        : '发件服务器不支持下游投递回执。';
+      return { content: `邮件“${emailProposal.subject}”已交给发件服务器，已接受收件人：${accepted}${rejected}。${deliveryNotice}对方邮箱何时入箱仍取决于后续投递。` };
+    }
+    if (!musicProposal) return result;
+    const actionText = musicProposal.kind === 'add_music_to_playlist'
+      ? `已将“${musicProposal.trackTitle}”添加到「${result.playlist.name}」`
+      : `已将“${musicProposal.trackTitle}”从「${result.playlist.name}」移除`;
+    return { content: `${actionText}，已同步到网易云音乐。` };
   });
   ipcMain.handle('agent:get-suggestions', () => proactive.listSuggestions());
   ipcMain.handle('agent:get-suggestion-history', () => proactive.listSuggestionHistory());

@@ -1,11 +1,15 @@
 const { ImapFlow } = require('imapflow');
 const nodemailer = require('nodemailer');
 const { simpleParser } = require('mailparser');
+const crypto = require('node:crypto');
 const store = require('./store.cjs');
 
 const SECRET_PREFIX = 'safe-storage:v1:';
 const MAX_LIST_LIMIT = 100;
 const MAX_MESSAGE_SOURCE_BYTES = 2 * 1024 * 1024;
+const MAX_AGENT_INBOX_BATCH = 12;
+const MAX_AGENT_SOURCE_BYTES = 64 * 1024;
+const MAX_AGENT_TEXT_CHARS = 4_000;
 const FOLDER_PRIORITY = ['\\Inbox', '\\Sent', '\\Drafts', '\\Flagged', '\\Junk', '\\Trash'];
 
 let safeStorage = null;
@@ -151,10 +155,14 @@ function saveAccount(input = {}) {
   return account();
 }
 
-function connectionConfig() {
+function connectionConfig(input) {
   const email = getStoredEmail();
-  const config = validateAccountInput(email);
-  return { ...config, password: decryptPassword(email.pass) };
+  const config = validateAccountInput(input || email);
+  // 测试连接可以使用尚未保存的表单值；仅在用户点击保存时才会加密并持久化授权码。
+  const password = typeof input?.password === 'string' && input.password.length > 0
+    ? input.password
+    : decryptPassword(email.pass);
+  return { ...config, password };
 }
 
 function toMailError(error) {
@@ -191,8 +199,7 @@ function createImapClient(config) {
   return client;
 }
 
-async function withImap(callback) {
-  const config = connectionConfig();
+async function withImap(callback, config = connectionConfig()) {
   const client = createImapClient(config);
   try {
     await client.connect();
@@ -254,6 +261,11 @@ function normaliseLimit(value) {
   return Math.max(1, Math.min(MAX_LIST_LIMIT, limit));
 }
 
+function recentMessageSequence(total, limit) {
+  if (!Number.isInteger(total) || total <= 0) return null;
+  return Math.max(1, total - limit + 1) + ':*';
+}
+
 function normaliseAddresses(addresses) {
   if (!Array.isArray(addresses)) return [];
   return addresses
@@ -295,8 +307,9 @@ async function listMailbox(requestedFolder = '', requestedLimit = 50) {
     try {
       const total = Number(status.messages ?? client.mailbox?.exists ?? 0);
       const unseen = Number(status.unseen ?? 0);
-      const fetched = total
-        ? await client.fetchAll('*:-' + limit, {
+      const sequence = recentMessageSequence(total, limit);
+      const fetched = sequence
+        ? await client.fetchAll(sequence, {
           uid: true,
           envelope: true,
           flags: true,
@@ -318,12 +331,139 @@ async function listMailbox(requestedFolder = '', requestedLimit = 50) {
   });
 }
 
+function normaliseAgentText(value) {
+  return String(value || '')
+    .replace(/\u0000/g, '')
+    .replace(/\r\n?/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+    .slice(0, MAX_AGENT_TEXT_CHARS);
+}
+
+function mailboxUidValidity(mailbox) {
+  const value = Number(mailbox?.uidValidity);
+  return Number.isSafeInteger(value) && value > 0 ? value : 0;
+}
+
+function isLikelyPromotional(summary, text = '', listUnsubscribe = '') {
+  const haystack = [
+    summary.subject,
+    ...(summary.from || []).map((address) => `${address.name} ${address.address}`),
+    text,
+    listUnsubscribe,
+  ].join('\n').toLowerCase();
+  // 招聘/面试等信号优先于群发或 no-reply 特征，避免漏掉招聘平台的系统邮件。
+  const careerSignal = /(招聘|应聘|候选人|简历|面试|笔试|测评|offer|录用|校招|internship|interview|recruit(?:ment|er)?|application|candidate)/i.test(haystack);
+  const promotionSignal = /(退订|取消订阅|unsubscribe|newsletter|营销|推广|促销|优惠|折扣|限时|会员专享|优惠券|广告|sale\b|deal\b|campaign)/i.test(haystack);
+  return promotionSignal && !careerSignal;
+}
+
+async function agentInboxPreview(message, folder) {
+  const summary = messageSummary(message, folder);
+  let text = '';
+  let listUnsubscribe = '';
+  if (message.source?.length) {
+    try {
+      const parsed = await simpleParser(message.source);
+      text = normaliseAgentText(parsed.text);
+      listUnsubscribe = String(parsed.headers?.get('list-unsubscribe') || '');
+    } catch {
+      // 解析失败时仅使用可信的信封信息；不让一封异常邮件阻塞后续收件检查。
+    }
+  }
+  return {
+    ...summary,
+    text,
+    locallyFiltered: isLikelyPromotional(summary, text, listUnsubscribe),
+  };
+}
+
+/**
+ * 返回指定 UID 游标之后的一小批 Inbox 邮件，供 Agent 做重要性判断。
+ * 首次调用只建立游标，不回溯整箱旧邮件，避免首次启用时制造通知风暴。
+ */
+async function listInboxForAgent(afterUid = null, requestedLimit = MAX_AGENT_INBOX_BATCH) {
+  const limit = Math.max(1, Math.min(MAX_AGENT_INBOX_BATCH, Number(requestedLimit) || MAX_AGENT_INBOX_BATCH));
+  const cursor = Number(afterUid);
+  const hasCursor = Number.isSafeInteger(cursor) && cursor >= 0;
+  return withImap(async (client) => {
+    const folders = await getFolders(client);
+    const folder = selectFolder(folders, '');
+    const lock = await client.getMailboxLock(folder);
+    try {
+      const uidValidity = mailboxUidValidity(client.mailbox);
+      if (!hasCursor) {
+        const latest = await client.fetchOne('*', { uid: true });
+        return {
+          folder,
+          uidValidity,
+          initialized: true,
+          nextUid: Number(latest?.uid) || 0,
+          hasMore: false,
+          messages: [],
+        };
+      }
+      const uids = await client.search({ uid: `${cursor + 1}:*` }, { uid: true });
+      const pending = [...new Set(uids.map(Number).filter((uid) => Number.isSafeInteger(uid) && uid > cursor))]
+        .sort((left, right) => left - right);
+      const selected = pending.slice(0, limit);
+      if (!selected.length) {
+        return { folder, uidValidity, initialized: false, nextUid: cursor, hasMore: false, messages: [] };
+      }
+      const fetched = await client.fetchAll(selected, {
+        uid: true,
+        envelope: true,
+        flags: true,
+        internalDate: true,
+        size: true,
+        // 只取开头，足够覆盖常见主题、发件人和行动说明，也避免把大附件或整封长邮件交给模型。
+        source: { start: 0, maxLength: MAX_AGENT_SOURCE_BYTES },
+      }, { uid: true });
+      const messages = await Promise.all(fetched
+        .sort((left, right) => Number(left.uid) - Number(right.uid))
+        .map((message) => agentInboxPreview(message, folder)));
+      return {
+        folder,
+        uidValidity,
+        initialized: false,
+        nextUid: selected.at(-1),
+        hasMore: pending.length > selected.length,
+        messages,
+      };
+    } finally {
+      lock.release();
+    }
+  });
+}
+
 function normaliseAttachment(attachment) {
   return {
     filename: cleanText(attachment?.filename) || '未命名附件',
     contentType: cleanText(attachment?.contentType) || 'application/octet-stream',
     size: Number(attachment?.size || attachment?.content?.length || 0),
   };
+}
+
+function normaliseHtmlBody(value) {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function normaliseContentId(value) {
+  return String(value || '').trim().replace(/^<|>$/g, '');
+}
+
+function embedRelatedImages(html, attachments) {
+  if (!html) return '';
+
+  const inlineImages = new Map();
+  for (const attachment of attachments || []) {
+    const cid = normaliseContentId(attachment?.cid || attachment?.contentId);
+    const contentType = cleanText(attachment?.contentType).toLowerCase();
+    if (!cid || !/^image\/[a-z0-9.+-]+$/i.test(contentType) || !Buffer.isBuffer(attachment?.content)) continue;
+    inlineImages.set(cid, 'data:' + contentType + ';base64,' + attachment.content.toString('base64'));
+  }
+
+  return html.replace(/\bcid:([^'"\s)<>]+)/gi, (match, cid) => inlineImages.get(normaliseContentId(cid)) || match);
 }
 
 function messageTooLargeText(size) {
@@ -359,6 +499,7 @@ async function getMessage(requestedFolder, rawUid) {
           messageId: cleanText(metadata.envelope?.messageId) || null,
           inReplyTo: cleanText(metadata.envelope?.inReplyTo) || null,
           text: messageTooLargeText(summary.size),
+          html: '',
           bodyUnavailable: true,
           attachments: [],
         };
@@ -379,6 +520,7 @@ async function getMessage(requestedFolder, rawUid) {
         messageId: cleanText(parsed.messageId || metadata.envelope?.messageId) || null,
         inReplyTo: cleanText(parsed.inReplyTo || metadata.envelope?.inReplyTo) || null,
         text: String(parsed.text || '此邮件没有可显示的纯文本正文。').trim() || '此邮件没有可显示的纯文本正文。',
+        html: embedRelatedImages(normaliseHtmlBody(parsed.html), parsed.attachments),
         bodyUnavailable: false,
         attachments,
       };
@@ -417,10 +559,12 @@ function createSmtpTransport(config) {
   });
 }
 
-async function verifyConnection() {
+async function verifyConnection(input) {
   const result = { imap: false, smtp: false, imapError: '', smtpError: '' };
+  let config;
   try {
-    await withImap(async () => {});
+    config = connectionConfig(input);
+    await withImap(async () => {}, config);
     result.imap = true;
   } catch (error) {
     result.imapError = toMailError(error).message;
@@ -428,7 +572,7 @@ async function verifyConnection() {
 
   let transport = null;
   try {
-    const config = connectionConfig();
+    config ||= connectionConfig(input);
     transport = createSmtpTransport(config);
     await transport.verify();
     result.smtp = true;
@@ -475,6 +619,28 @@ function normaliseMessageId(value) {
   return messageId;
 }
 
+function smtpReceipt(result = {}) {
+  const accepted = Array.isArray(result.accepted)
+    ? result.accepted.map((value) => cleanText(String(value))).filter(Boolean)
+    : [];
+  const rejected = Array.isArray(result.rejected)
+    ? result.rejected.map((value) => cleanText(String(value))).filter(Boolean)
+    : [];
+  if (!accepted.length) {
+    throw userError(rejected.length
+      ? '发件服务器未接受收件人：' + rejected.join('、')
+      : '发件服务器没有确认接受任何收件人，请稍后重试');
+  }
+  return {
+    messageId: cleanText(String(result.messageId || '')),
+    accepted,
+    rejected,
+    response: cleanText(String(result.response || '')).slice(0, 240),
+    deliveryId: cleanText(String(result.deliveryId || '')),
+    dsnSupported: Array.isArray(result.ehlo) && result.ehlo.some((line) => /^DSN\b/i.test(String(line || '').trim())),
+  };
+}
+
 async function sendMessage(input = {}) {
   const config = connectionConfig();
   const to = addressList(input.to, '收件人', true);
@@ -482,6 +648,7 @@ async function sendMessage(input = {}) {
   const subject = normaliseSubject(input.subject);
   const text = normaliseBody(input.text);
   const inReplyTo = normaliseMessageId(input.inReplyTo);
+  const deliveryId = 'loom-' + crypto.randomUUID();
   const transport = createSmtpTransport(config);
   try {
     const result = await transport.sendMail({
@@ -491,8 +658,17 @@ async function sendMessage(input = {}) {
       ...(inReplyTo ? { inReplyTo } : {}),
       subject,
       text,
+      // DSN 是可选 SMTP 扩展：服务器未声明 DSN 时 Nodemailer 会正常发送，但无法获得后续失败/延迟回执。
+      dsn: {
+        id: deliveryId,
+        return: 'headers',
+        notify: ['failure', 'delay'],
+      },
+      headers: {
+        'X-Loom-Delivery-Id': deliveryId,
+      },
     });
-    return { messageId: String(result.messageId || '') };
+    return smtpReceipt({ ...result, deliveryId });
   } catch (error) {
     throw toMailError(error);
   } finally {
@@ -506,12 +682,15 @@ module.exports = {
   saveAccount,
   verifyConnection,
   listMailbox,
+  listInboxForAgent,
   getMessage,
   markRead,
   sendMessage,
   validateAccountInput,
   addressList,
+  smtpReceipt,
   messageSummary,
+  isLikelyPromotional,
 };
 
 if (process.env.WORKBENCH_MAIL_SELF_TEST === '1') {
@@ -534,6 +713,22 @@ if (process.env.WORKBENCH_MAIL_SELF_TEST === '1') {
   assert.throws(() => validateAccountInput({ ...config, port: 70000 }), /IMAP 端口/);
   assert.deepEqual(addressList('a@example.com; b@example.com', '收件人', true), ['a@example.com', 'b@example.com']);
   assert.throws(() => addressList('not-an-address', '收件人', true), /无效/);
+  assert.deepEqual(smtpReceipt({
+    messageId: '<mail@example.com>',
+    accepted: ['recipient@example.com'],
+    rejected: [],
+    response: '250 2.0.0 queued',
+    deliveryId: 'loom-example',
+    ehlo: ['PIPELINING', 'DSN'],
+  }), {
+    messageId: '<mail@example.com>',
+    accepted: ['recipient@example.com'],
+    rejected: [],
+    response: '250 2.0.0 queued',
+    deliveryId: 'loom-example',
+    dsnSupported: true,
+  });
+  assert.throws(() => smtpReceipt({ accepted: [], rejected: ['missing@example.com'] }), /未接受收件人/);
   const summary = messageSummary({
     uid: 42,
     envelope: {
@@ -550,6 +745,21 @@ if (process.env.WORKBENCH_MAIL_SELF_TEST === '1') {
   assert.equal(summary.seen, false);
   assert.equal(summary.subject, '测试邮件');
   assert.equal(summary.from[0].address, 'from@example.com');
+  assert.equal(isLikelyPromotional({ subject: '限时优惠，点击领取优惠券', from: [] }), true);
+  assert.equal(isLikelyPromotional({ subject: '面试邀请：请确认时间', from: [] }, '本周有招聘面试安排，点击确认。'), false);
+  assert.equal(normaliseHtmlBody('<p>富文本正文</p>'), '<p>富文本正文</p>');
+  assert.equal(normaliseHtmlBody(false), '');
+  const embeddedHtml = embedRelatedImages('<img src="cid:banner@example.com">', [{
+    cid: '<banner@example.com>',
+    contentType: 'image/svg+xml',
+    content: Buffer.from('<svg/>'),
+  }]);
+  assert.match(embeddedHtml, /^<img src="data:image\/svg\+xml;base64,/);
+  assert.match(embedRelatedImages('<img src="cid:missing@example.com">', []), /cid:missing@example\.com/);
+  assert.equal(recentMessageSequence(0, 50), null);
+  assert.equal(recentMessageSequence(1, 50), '1:*');
+  assert.equal(recentMessageSequence(50, 50), '1:*');
+  assert.equal(recentMessageSequence(51, 50), '2:*');
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'workbench-mail-self-test-'));
   try {
     store.init(tempDir);
@@ -565,6 +775,16 @@ if (process.env.WORKBENCH_MAIL_SELF_TEST === '1') {
     assert.equal(saved.configured, true);
     assert.match(store.getSettings().email.pass, /^safe-storage:v1:/);
     assert.notEqual(store.getSettings().email.pass, 'app-token');
+    const savedPassword = store.getSettings().email.pass;
+    const preview = connectionConfig({
+      ...config,
+      user: 'draft@example.com',
+      password: 'draft-token',
+    });
+    assert.equal(preview.user, 'draft@example.com');
+    assert.equal(preview.password, 'draft-token');
+    assert.equal(store.getSettings().email.pass, savedPassword);
+    assert.equal(connectionConfig({ ...config, password: '' }).password, 'app-token');
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
