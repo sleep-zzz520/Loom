@@ -104,10 +104,12 @@ export default function Today({ onNavigate, onOpenAgent }: TodayProps) {
         </main>
 
         <aside className="today-secondary-column">
-          {data.pending.length > 0 && <section className="today-section today-pending-section" aria-labelledby="today-pending-title">
+          <section className="today-section today-pending-section" aria-labelledby="today-pending-title">
             <div className="today-section-head"><h2 id="today-pending-title">Agent 提醒</h2><button type="button" className="today-section-link" onClick={() => onOpenAgent()}>打开 Agent <ChevronRight size={14} /></button></div>
-            <div className="today-pending-list">{data.pending.map((item) => <button key={item.id} type="button" className="today-pending-item" onClick={() => onOpenAgent(item.messageId || undefined)}><span><strong>{item.title}</strong><small>{item.summary}</small></span><ChevronRight size={14} aria-hidden="true" /></button>)}</div>
-          </section>}
+            {data.pending.length
+              ? <div className="today-pending-list">{data.pending.map((item) => <button key={item.id} type="button" className="today-pending-item" onClick={() => onOpenAgent(item.messageId || undefined)}><span><strong>{item.title}</strong><small>{item.summary}</small></span><ChevronRight size={14} aria-hidden="true" /></button>)}</div>
+              : <button type="button" className="today-pending-item today-inline-empty" onClick={() => onOpenAgent()}><p>当前没有需要处理的提醒。</p></button>}
+          </section>
 
           {data.activeGoals.length > 0 && <section className="today-section today-goals-section" aria-labelledby="today-goals-title">
             <div className="today-section-head"><h2 id="today-goals-title">进行中的目标</h2></div>
