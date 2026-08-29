@@ -129,6 +129,145 @@ function monthDay(value) {
   return `${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
 }
 
+function normalisePersonalDate(input = {}) {
+  const title = String(input.title || '').trim();
+  const date = String(input.date || '').trim();
+  const match = /^(\d{2})-(\d{2})$/.exec(date);
+  const month = match ? Number(match[1]) : 0;
+  const day = match ? Number(match[2]) : 0;
+  if (!title || !match || month < 1 || month > 12 || day < 1 || day > new Date(2024, month, 0).getDate()) {
+    throw new Error('个人日期需要名称和有效的 MM-DD 日期');
+  }
+  return { title, date };
+}
+
+function nextPersonalDateDue(date, now = new Date()) {
+  const [month, day] = date.split('-').map(Number);
+  const today = dateKey(now);
+  for (let year = now.getFullYear(); year <= now.getFullYear() + 8; year += 1) {
+    const candidate = new Date(year, month - 1, day, 9, 0, 0, 0);
+    if (candidate.getMonth() !== month - 1 || candidate.getDate() !== day || dateKey(candidate) < today) continue;
+    return candidate.toISOString();
+  }
+  throw new Error('无法计算个人日期的下一次日历时间');
+}
+
+function reconcilePersonalDateTodo(todos, personalDate, now = new Date()) {
+  const linkedIndex = todos.findIndex((todo) => todo.personalDateId === personalDate.id);
+  const compatibleIndex = todos.findIndex((todo) => (
+    !todo.personalDateId
+    && todo.repeat === 'yearly'
+    && todo.title === personalDate.title
+    && monthDay(todo.start || todo.due) === personalDate.date
+  ));
+  const index = linkedIndex >= 0 ? linkedIndex : compatibleIndex;
+  if (index >= 0) {
+    const current = todos[index];
+    const recurrenceId = current.recurrenceId || current.id;
+    const hasCorrectDate = monthDay(current.start || current.due) === personalDate.date;
+    const due = hasCorrectDate && current.due ? current.due : nextPersonalDateDue(personalDate.date, now);
+    const next = {
+      ...current,
+      title: personalDate.title,
+      start: current.start ? (hasCorrectDate ? current.start : due) : null,
+      due,
+      done: false,
+      repeat: 'yearly',
+      repeatUntil: null,
+      personalDateId: personalDate.id,
+      recurrenceId,
+    };
+    const changed = JSON.stringify(next) !== JSON.stringify(current);
+    return {
+      todos: changed ? todos.map((todo, todoIndex) => (todoIndex === index ? next : todo)) : todos,
+      todo: next,
+      changed,
+      created: false,
+    };
+  }
+
+  const id = store.newId();
+  const due = nextPersonalDateDue(personalDate.date, now);
+  const todo = {
+    id,
+    title: personalDate.title,
+    priority: 'medium',
+    start: due,
+    end: null,
+    due,
+    done: false,
+    repeat: 'yearly',
+    repeatUntil: null,
+    color: null,
+    personalDateId: personalDate.id,
+    agentGoalId: null,
+    recurrenceId: id,
+    createdAt: new Date().toISOString(),
+  };
+  return { todos: [todo, ...todos], todo, changed: true, created: true };
+}
+
+/** 保存个人日期时同步建立年度日历记录；重复确认也会修复旧版孤儿数据。 */
+function savePersonalDate(input, now = new Date()) {
+  const safeInput = normalisePersonalDate(input);
+  let result = null;
+  const data = store.updateData((current) => {
+    const dates = Array.isArray(current.settings.notify?.importantDates) ? current.settings.notify.importantDates : [];
+    const existing = dates.find((item) => item.title === safeInput.title && item.date === safeInput.date);
+    const personalDate = existing || { id: store.newId(), ...safeInput };
+    if (!existing) current.settings.notify.importantDates = [...dates, personalDate];
+    const reconciled = reconcilePersonalDateTodo(current.modules.todos || [], personalDate, now);
+    current.modules.todos = reconciled.todos;
+    result = {
+      personalDate,
+      todo: reconciled.todo,
+      personalDateCreated: !existing,
+      todoCreated: reconciled.created,
+    };
+  });
+  return { ...result, todos: data.modules.todos };
+}
+
+/** 启动时只在确有缺失时迁移，避免每次启动都改写用户数据。 */
+function repairPersonalDateTodos(now = new Date()) {
+  const current = store.getData();
+  const dates = Array.isArray(current.settings.notify?.importantDates) ? current.settings.notify.importantDates : [];
+  let previewTodos = current.modules.todos || [];
+  let needsRepair = false;
+  for (const rawDate of dates) {
+    let personalDate;
+    try {
+      personalDate = { id: String(rawDate.id || '').trim(), ...normalisePersonalDate(rawDate) };
+    } catch {
+      continue;
+    }
+    if (!personalDate.id) continue;
+    const reconciled = reconcilePersonalDateTodo(previewTodos, personalDate, now);
+    previewTodos = reconciled.todos;
+    needsRepair ||= reconciled.changed;
+  }
+  if (!needsRepair) return { todos: current.modules.todos || [], repaired: 0 };
+
+  let repaired = 0;
+  const data = store.updateData((next) => {
+    let todos = next.modules.todos || [];
+    for (const rawDate of dates) {
+      let personalDate;
+      try {
+        personalDate = { id: String(rawDate.id || '').trim(), ...normalisePersonalDate(rawDate) };
+      } catch {
+        continue;
+      }
+      if (!personalDate.id) continue;
+      const reconciled = reconcilePersonalDateTodo(todos, personalDate, now);
+      todos = reconciled.todos;
+      if (reconciled.changed) repaired += 1;
+    }
+    next.modules.todos = todos;
+  });
+  return { todos: data.modules.todos, repaired };
+}
+
 /** 将确认后的每年日历记录关联为 Agent 的个人重要日期。 */
 function rememberPersonalDate(todoId) {
   const todo = store.getModule('todos').find((item) => item.id === todoId);
@@ -137,22 +276,7 @@ function rememberPersonalDate(todoId) {
   }
   const date = monthDay(todo.due);
   if (!date) throw new Error('日历日期无效');
-  const settings = store.getSettings();
-  const dates = Array.isArray(settings.notify?.importantDates) ? settings.notify.importantDates : [];
-  const personalDate = dates.find((item) => item.title === todo.title && item.date === date)
-    || { id: store.newId(), title: todo.title, date };
-  if (!dates.some((item) => item.id === personalDate.id)) {
-    store.setSettings({ notify: { importantDates: [...dates, personalDate] } });
-  }
-  const recurrenceId = todo.recurrenceId || todo.id;
-  const todos = store.updateModule('todos', (items) => {
-    return items.map((item) =>
-      item.id === todo.id || item.recurrenceId === recurrenceId
-        ? { ...item, recurrenceId, personalDateId: personalDate.id }
-        : item
-    );
-  });
-  return { todos, personalDate };
+  return savePersonalDate({ title: todo.title, date });
 }
 
 function listNotes() {
@@ -186,6 +310,8 @@ const workspace = {
   createTodo,
   updateTodo,
   removeTodo,
+  savePersonalDate,
+  repairPersonalDateTodos,
   rememberPersonalDate,
   listNotes,
   saveNote,
@@ -277,6 +403,22 @@ if (process.env.WORKBENCH_SELF_TEST === '1') {
     const nextBirthday = workspace.updateTodo(legacyBirthday.id, { done: true }).find((todo) => todo.id === legacyBirthday.id);
     if (!nextBirthday || new Date(nextBirthday.due).getFullYear() !== 2027 || nextBirthday.done || store.getModule('todos').length !== 1 || !nextBirthday.personalDateId || migrated.personalDate.date !== '05-20') {
       throw new Error('legacy yearly birthday migration failed');
+    }
+    store.setModule('todos', []);
+    store.setSettings({ notify: { importantDates: [] } });
+    const agentBirthday = workspace.savePersonalDate({ title: 'Agent 生日', date: '05-20' }, new Date('2026-08-29T10:00:00'));
+    const savedBirthdayTodo = agentBirthday.todos.find((todo) => todo.personalDateId === agentBirthday.personalDate.id);
+    if (!agentBirthday.personalDateCreated || !agentBirthday.todoCreated || !savedBirthdayTodo || savedBirthdayTodo.repeat !== 'yearly' || dateKey(savedBirthdayTodo.due) !== '2027-05-20') {
+      throw new Error('agent personal date calendar sync failed');
+    }
+    const duplicateBirthday = workspace.savePersonalDate({ title: 'Agent 生日', date: '05-20' }, new Date('2026-08-29T10:00:00'));
+    if (duplicateBirthday.personalDateCreated || duplicateBirthday.todoCreated || duplicateBirthday.todos.length !== 1) {
+      throw new Error('personal date duplicate sync failed');
+    }
+    store.setModule('todos', []);
+    const repaired = workspace.repairPersonalDateTodos(new Date('2026-08-29T10:00:00'));
+    if (repaired.repaired !== 1 || repaired.todos.length !== 1 || dateKey(repaired.todos[0].due) !== '2027-05-20') {
+      throw new Error('orphan personal date repair failed');
     }
     console.log('workspace self-test ok');
   } finally {

@@ -2,6 +2,7 @@ import { useEffect, useState, type CSSProperties, type FocusEvent } from 'react'
 import {
   ArrowUpRight,
   BellRing,
+  BookOpenCheck,
   CalendarDays,
   ChevronDown,
   CheckSquare,
@@ -14,6 +15,7 @@ import {
   Settings as SettingsIcon,
   Sparkles,
   StickyNote,
+  SunMedium,
   Trash2,
   X,
 } from 'lucide-react';
@@ -25,9 +27,15 @@ import MailModule from './modules/Mail';
 import Settings from './modules/Settings';
 import Notes from './modules/Notes';
 import Profile from './modules/Profile';
+import Today from './modules/Today';
+import WeeklyReview from './modules/WeeklyReview';
+import QuickCapture from './components/QuickCapture';
+import { isQuickCaptureShortcut } from './components/captureParser';
 import type { AgentMusicCommand, AgentProactiveAlert, Category, ProfileItem } from './types';
 
 export type ModuleKey =
+  | 'today'
+  | 'weekly'
   | 'todos'
   | 'calendar'
   | 'notes'
@@ -39,6 +47,8 @@ export type ModuleKey =
 export type SettingsKey = 'settings-profile' | 'settings-notifications' | 'settings-config';
 
 const NAV: { key: ModuleKey; label: string; icon: typeof CheckSquare }[] = [
+  { key: 'today', label: '今日', icon: SunMedium },
+  { key: 'weekly', label: '周回顾', icon: BookOpenCheck },
   { key: 'todos', label: '待办', icon: CheckSquare },
   { key: 'calendar', label: '日历', icon: CalendarDays },
   { key: 'notes', label: '备忘录', icon: StickyNote },
@@ -70,6 +80,13 @@ function ProactiveAlertToast({
   onDismiss: () => void;
 }) {
   const isFollowUp = alert.phase === 'follow-up';
+  const mailPriorityLabel = alert.priority === 'high'
+    ? '高优先级邮件'
+    : alert.priority === 'medium'
+      ? '中优先级邮件'
+      : alert.priority === 'low'
+        ? '低优先级邮件'
+        : '';
   const alertText = `${alert.title}${alert.summary}`;
   const isDeadlineAlert = /(?:即将到期|已超期)/.test(alertText);
   const isOverdue = /超期/.test(alertText);
@@ -83,11 +100,11 @@ function ProactiveAlertToast({
       ? '建议优先处理，避免超期。'
       : alert.summary;
   return (
-    <aside className={`proactive-alert-toast ${isOverdue ? 'is-overdue' : 'is-upcoming'}`} role="alert" aria-live="assertive" aria-labelledby="proactive-alert-title">
+    <aside className={`proactive-alert-toast ${alert.priority ? `is-mail-${alert.priority}` : (isOverdue ? 'is-overdue' : 'is-upcoming')}`} role="alert" aria-live="assertive" aria-labelledby="proactive-alert-title">
       <header className="proactive-alert-header">
         <span className="proactive-alert-status">
           <BellRing size={14} aria-hidden="true" />
-          {isOverdue ? '已超期' : (isDeadlineAlert ? '即将到期' : (isFollowUp ? '跟进提醒' : 'Agent 提醒'))}
+          {mailPriorityLabel || (isOverdue ? '已超期' : (isDeadlineAlert ? '即将到期' : (isFollowUp ? '跟进提醒' : 'Agent 提醒')))}
         </span>
         <button type="button" className="proactive-alert-close" onClick={onDismiss} aria-label="关闭主动提醒" title="关闭主动提醒"><X size={16} /></button>
       </header>
@@ -106,7 +123,7 @@ function ProactiveAlertToast({
 }
 
 export default function App() {
-  const [active, setActive] = useState<ModuleKey | SettingsKey>('todos');
+  const [active, setActive] = useState<ModuleKey | SettingsKey>('today');
   const [clockNow, setClockNow] = useState(() => new Date());
   const [musicCommand, setMusicCommand] = useState<AgentMusicCommand | null>(null);
   const [agentOpenMessageId, setAgentOpenMessageId] = useState('');
@@ -126,6 +143,7 @@ export default function App() {
   const [categoryDeleteDestination, setCategoryDeleteDestination] = useState('');
   const [deletingCategory, setDeletingCategory] = useState(false);
   const [categoryDeleteError, setCategoryDeleteError] = useState('');
+  const [quickCaptureOpen, setQuickCaptureOpen] = useState(false);
   const [appName, setAppName] = useState('Loom');
   const [avatarDataUrl, setAvatarDataUrl] = useState('');
   const today = new Intl.DateTimeFormat('zh-CN', {
@@ -324,6 +342,16 @@ export default function App() {
     };
   }, [resizingSidebar]);
 
+  useEffect(() => {
+    const openQuickCapture = (event: KeyboardEvent) => {
+      if (!isQuickCaptureShortcut(event)) return;
+      event.preventDefault();
+      setQuickCaptureOpen(true);
+    };
+    document.addEventListener('keydown', openQuickCapture);
+    return () => document.removeEventListener('keydown', openQuickCapture);
+  }, []);
+
   const shellStyle = {
     '--sidebar-width': sidebarCollapsed ? '64px' : `${sidebarWidth}px`,
   } as CSSProperties;
@@ -441,6 +469,11 @@ export default function App() {
             )}
           </div>
         </nav>
+        <button type="button" className="sidebar-capture" onClick={() => setQuickCaptureOpen(true)} aria-label="快速收集，快捷键 Command 加 K" title="快速收集（⌘ K）">
+          <Plus size={16} aria-hidden="true" />
+          <span>快速收集</span>
+          <kbd>⌘ K</kbd>
+        </button>
         <div className="sidebar-foot" aria-label={`当前时间 ${currentTime}，${today}`}>
           <time className="sidebar-clock" dateTime={currentTime}>{currentTime}</time>
           <span className="sidebar-date">{today}</span>
@@ -458,7 +491,29 @@ export default function App() {
         }}
       />
       <main className={`content${active === 'agent' ? ' content-agent' : ''}${active === 'mail' ? ' content-mail' : ''}`}>
-        {active === 'todos' ? (
+        {active === 'today' ? (
+          <Today
+            onNavigate={(target) => {
+              setProfileOpen(target === 'profile');
+              setSettingsOpen(false);
+              setActive(target);
+            }}
+            onOpenAgent={(messageId) => {
+              setProfileOpen(false);
+              setSettingsOpen(false);
+              setAgentOpenMessageId(messageId || '');
+              setActive('agent');
+            }}
+          />
+        ) : active === 'weekly' ? (
+          <WeeklyReview
+            onNavigate={(target) => {
+              setProfileOpen(target === 'profile');
+              setSettingsOpen(false);
+              setActive(target);
+            }}
+          />
+        ) : active === 'todos' ? (
           <Todos />
         ) : active === 'calendar' ? (
           <Calendar />
@@ -486,6 +541,15 @@ export default function App() {
           null
         )}
       </main>
+      <QuickCapture
+        open={quickCaptureOpen}
+        onClose={() => setQuickCaptureOpen(false)}
+        onNavigate={(target) => {
+          setProfileOpen(false);
+          setSettingsOpen(false);
+          setActive(target);
+        }}
+      />
       {proactiveAlert && (
         <ProactiveAlertToast
           alert={proactiveAlert}

@@ -24,6 +24,7 @@ const runContextLabel = {
 } as const;
 
 const priorityLabel = { high: '高优先级', medium: '中优先级', low: '低优先级' };
+const mailPriorityLabel = { high: '高优先级邮件', medium: '中优先级邮件', low: '低优先级邮件' };
 const goalStatusLabel: Record<AgentGoalStatus, string> = {
   active: '进行中',
   paused: '已暂停',
@@ -955,6 +956,7 @@ export default function Agent({
                   <article key={suggestion.id} className={`agent-suggestion${suggestion.status === 'unread' ? ' is-unread' : ''}${suggestion.status === 'acted' ? ' is-acted' : ''}`}>
                     <div className="agent-suggestion-icon"><Sparkles size={16} /></div>
                     <div className="agent-suggestion-main">
+                      {suggestion.priority && <span className={`agent-suggestion-priority is-${suggestion.priority}`}>{mailPriorityLabel[suggestion.priority]}</span>}
                       <h3>{suggestion.title}</h3>
                       <p>{suggestion.summary}</p>
                       <small>{suggestion.reason}</small>

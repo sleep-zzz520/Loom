@@ -293,6 +293,103 @@ export interface WorkspaceSnapshot {
   settings: AppSettings;
 }
 
+export type TodayTimelineItemType = 'todo' | 'schedule';
+export type TodayRecentItemType = 'note' | 'library';
+
+export interface TodayFocusItem {
+  id: string;
+  title: string;
+  priority: Priority;
+  due: string | null;
+  start: string | null;
+  reason: string;
+  goalTitle: string | null;
+}
+
+export interface TodayTimelineItem {
+  id: string;
+  title: string;
+  at: string;
+  time: string;
+  type: TodayTimelineItemType;
+  priority: Priority;
+}
+
+export interface TodayPendingItem {
+  id: string;
+  title: string;
+  summary: string;
+  messageId: string;
+  status: AgentSuggestionStatus;
+}
+
+export interface TodayGoalItem {
+  id: string;
+  title: string;
+  progress: number;
+  completed: number;
+  total: number;
+  nextAction: string;
+}
+
+export interface TodayRecentItem {
+  id: string;
+  title: string;
+  updatedAt: string;
+  type: TodayRecentItemType;
+}
+
+export interface TodaySnapshot {
+  date: string;
+  focusItems: TodayFocusItem[];
+  timeline: TodayTimelineItem[];
+  timelineTotal: number;
+  pending: TodayPendingItem[];
+  activeGoals: TodayGoalItem[];
+  recentCaptures: TodayRecentItem[];
+}
+
+export type WeeklyItemType = 'todo' | 'schedule';
+
+export interface WeeklyItem {
+  id: string;
+  title: string;
+  priority: Priority;
+  at: string | null;
+  type: WeeklyItemType;
+}
+
+export interface WeeklyRecentNote {
+  id: string;
+  title: string;
+  updatedAt: string;
+}
+
+export interface WeeklySnapshot {
+  weekStart: string;
+  weekEnd: string;
+  nextWeekStart: string;
+  nextWeekEnd: string;
+  currentWeek: WeeklyItem[];
+  currentWeekTotal: number;
+  overdue: WeeklyItem[];
+  overdueCount: number;
+  nextWeek: WeeklyItem[];
+  nextWeekTotal: number;
+  recentNotes: WeeklyRecentNote[];
+  captureCount: number;
+  activeGoalCount: number;
+}
+
+export type BackupReason = 'auto' | 'manual' | 'pre-restore';
+
+export interface BackupRecord {
+  id: string;
+  reason: BackupReason;
+  createdAt: string;
+  size: number;
+}
+
 export interface ChatMessage {
   id?: string;
   role: 'user' | 'assistant';
@@ -408,6 +505,7 @@ export type AgentRunStatus = 'running' | 'completed' | 'failed';
 export type AgentSuggestionStatus = 'unread' | 'read' | 'dismissed' | 'acted';
 export type AgentRunContext = 'todos' | 'schedule' | 'notes' | 'library' | 'current-time' | 'goals' | 'memories' | 'skills' | 'mail';
 export type AgentRunDelivery = 'none' | 'in-app' | 'desktop-notification';
+export type MailPriority = 'high' | 'medium' | 'low';
 
 export interface AgentSuggestionReference {
   type: 'todo' | 'schedule' | 'note' | 'library' | 'mail';
@@ -422,6 +520,7 @@ export interface AgentSuggestion {
   title: string;
   summary: string;
   reason: string;
+  priority?: MailPriority | null;
   references: AgentSuggestionReference[];
   proposal?: AgentProposal | null;
   goalId?: string | null;
@@ -454,6 +553,7 @@ export interface AgentProactiveAlert {
   title: string;
   summary: string;
   reason: string;
+  priority?: MailPriority;
   createdAt: string;
 }
 
@@ -511,6 +611,18 @@ export interface WorkbenchApi {
       name: K,
       items: WorkbenchData['modules'][K]
     ) => Promise<WorkbenchData['modules'][K]>;
+  };
+  backup: {
+    list: () => Promise<BackupRecord[]>;
+    create: () => Promise<BackupRecord | null>;
+    restore: (id: string) => Promise<{ restored: boolean; restoredAt?: string; backup?: BackupRecord | null }>;
+    exportData: () => Promise<{ saved: boolean; filePath?: string }>;
+  };
+  today: {
+    getSnapshot: () => Promise<TodaySnapshot>;
+  };
+  weekly: {
+    getSnapshot: () => Promise<WeeklySnapshot>;
   };
   library: {
     importFile: (categoryId?: string) => Promise<{ items: ProfileItem[]; item: ProfileItem } | null>;

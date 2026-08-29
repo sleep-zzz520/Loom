@@ -3,7 +3,12 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 
 let dataFile = '';
+let backupDir = '';
+let lastAutomaticBackupAt = 0;
 const MAX_AVATAR_FILE_SIZE = 5 * 1024 * 1024;
+const AUTOMATIC_BACKUP_INTERVAL_MS = 5 * 60 * 1000;
+const MAX_RECENT_AUTOMATIC_BACKUPS = 10;
+const DAILY_BACKUP_RETENTION_DAYS = 14;
 
 const DEFAULT_DATA = {
   schemaVersion: 5,
@@ -45,7 +50,7 @@ const DEFAULT_DATA = {
       apiKey: '',
       model: '',
       proactiveEnabled: true,
-      // 邮件正文可能包含私人信息；只有用户在设置中明确开启后，才允许发送候选邮件摘要给 Agent 模型判断。
+      // 邮件正文可能包含私人信息；只有用户在设置中明确开启后，才启动后台分诊并发送候选邮件摘要给 Agent 模型判断。
       emailMonitorEnabled: false,
       persona: {
         name: 'Agent',
@@ -116,10 +121,70 @@ function mergeDeep(base, patch) {
 
 function init(userDataDir) {
   dataFile = path.join(userDataDir, 'workbench-data.json');
+  backupDir = path.join(userDataDir, 'backups');
   fs.mkdirSync(userDataDir, { recursive: true });
+  fs.mkdirSync(backupDir, { recursive: true });
   if (!fs.existsSync(dataFile)) {
     writeData(clone(DEFAULT_DATA));
   }
+}
+
+function safeDataCopy(data) {
+  const safe = clone(data);
+  if (safe.settings?.email) safe.settings.email.pass = '';
+  if (safe.settings?.agent) safe.settings.agent.apiKey = '';
+  if (safe.settings?.sync) safe.settings.sync.token = '';
+  return safe;
+}
+
+function backupFiles() {
+  if (!backupDir || !fs.existsSync(backupDir)) return [];
+  return fs.readdirSync(backupDir)
+    .filter((file) => /^(?:auto|manual|pre-restore)-\d+\.json$/.test(file))
+    .map((file) => {
+      const fullPath = path.join(backupDir, file);
+      const stat = fs.statSync(fullPath);
+      const reason = file.split('-')[0] === 'pre' ? 'pre-restore' : file.split('-')[0];
+      return { id: file, reason, createdAt: stat.mtime.toISOString(), size: stat.size, fullPath };
+    })
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+}
+
+function pruneBackups() {
+  const automatic = backupFiles().filter((item) => item.reason === 'auto');
+  const keep = new Set(automatic.slice(0, MAX_RECENT_AUTOMATIC_BACKUPS).map((item) => item.id));
+  const earliestDay = new Date();
+  earliestDay.setDate(earliestDay.getDate() - DAILY_BACKUP_RETENTION_DAYS);
+  const retainedDays = new Set();
+  for (const item of automatic) {
+    const date = new Date(item.createdAt);
+    if (date < earliestDay) continue;
+    const dayKey = date.toISOString().slice(0, 10);
+    if (!retainedDays.has(dayKey)) {
+      retainedDays.add(dayKey);
+      keep.add(item.id);
+    }
+  }
+  for (const item of automatic) {
+    if (!keep.has(item.id)) fs.rmSync(item.fullPath, { force: true });
+  }
+}
+
+function writeBackup(data, reason = 'manual') {
+  if (!backupDir) throw new Error('数据存储尚未初始化');
+  const allowedReason = ['auto', 'manual', 'pre-restore'].includes(reason) ? reason : 'manual';
+  const file = `${allowedReason}-${Date.now()}.json`;
+  fs.writeFileSync(path.join(backupDir, file), JSON.stringify(safeDataCopy(data), null, 2), 'utf8');
+  pruneBackups();
+  return backupFiles().find((item) => item.id === file) || null;
+}
+
+function maybeWriteAutomaticBackup(data) {
+  const now = Date.now();
+  // ponytail: 高频输入会在短时间内合并为一份恢复点；若未来出现多窗口并发编辑，再改为事务日志或版本数据库。
+  if (now - lastAutomaticBackupAt < AUTOMATIC_BACKUP_INTERVAL_MS) return;
+  writeBackup(data, 'auto');
+  lastAutomaticBackupAt = now;
 }
 
 function readData() {
@@ -196,8 +261,44 @@ function getData() {
 function updateData(mutator) {
   const current = readData();
   const next = mutator(current) || current;
+  maybeWriteAutomaticBackup(current);
   writeData(next);
   return readData();
+}
+
+function listBackups() {
+  return backupFiles().map(({ fullPath: _fullPath, ...item }) => item);
+}
+
+function createBackup() {
+  return writeBackup(readData(), 'manual');
+}
+
+function restoreBackup(id) {
+  const target = backupFiles().find((item) => item.id === String(id || ''));
+  if (!target) throw new Error('找不到所选备份');
+  let saved;
+  try {
+    saved = JSON.parse(fs.readFileSync(target.fullPath, 'utf8'));
+  } catch {
+    throw new Error('备份文件无法读取');
+  }
+  if (!saved || typeof saved !== 'object' || !saved.settings || !saved.modules) {
+    throw new Error('备份文件格式无效');
+  }
+  const current = readData();
+  writeBackup(current, 'pre-restore');
+  const restored = normalizeData(mergeDeep(clone(DEFAULT_DATA), saved));
+  // 备份与导出不携带密钥；恢复历史内容时也不意外覆盖当前设备上的敏感连接配置。
+  restored.settings.email.pass = current.settings.email.pass;
+  restored.settings.agent.apiKey = current.settings.agent.apiKey;
+  restored.settings.sync.token = current.settings.sync.token;
+  writeData(restored);
+  return { restoredAt: new Date().toISOString(), backup: listBackups().find((item) => item.id === target.id) || null };
+}
+
+function exportSafeData() {
+  return safeDataCopy(readData());
 }
 
 function newId() {
@@ -254,6 +355,10 @@ module.exports = {
   getModule,
   setModule,
   updateModule,
+  listBackups,
+  createBackup,
+  restoreBackup,
+  exportSafeData,
 };
 
 if (process.env.WORKBENCH_STORE_SELF_TEST === '1') {
@@ -282,6 +387,16 @@ if (process.env.WORKBENCH_STORE_SELF_TEST === '1') {
     assert.equal(setSettings({ profile: { avatarDataUrl: 'data:image/gif;base64,AA==' } }).profile.avatarDataUrl, '');
     assert.equal(setSettings({ profile: { avatarDataUrl: 'data:image/png;base64,AA==' } }).profile.avatarDataUrl, '');
     assert.equal(getModule('agentMemories').find((memory) => memory.content === '旧版工作偏好')?.status, 'active');
+    setSettings({ agent: { apiKey: 'store-self-test-secret' } });
+    const backup = createBackup();
+    assert.ok(backup?.id);
+    const backupText = fs.readFileSync(path.join(dir, 'backups', backup.id), 'utf8');
+    assert.ok(!backupText.includes('store-self-test-secret'));
+    setModule('notes', [{ id: 'after-backup', title: '恢复前的变化', content: '', updatedAt: '' }]);
+    const restored = restoreBackup(backup.id);
+    assert.ok(restored.restoredAt);
+    assert.equal(getModule('notes').length, 0);
+    assert.equal(getSettings().agent.apiKey, 'store-self-test-secret');
     console.log('store self-test ok');
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });

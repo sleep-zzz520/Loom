@@ -1,6 +1,9 @@
 const { app, BrowserWindow, dialog, ipcMain, net, safeStorage } = require('electron');
 const path = require('node:path');
+const fs = require('node:fs');
 const store = require('./store.cjs');
+const today = require('./today.cjs');
+const weekly = require('./weekly.cjs');
 const workspace = require('./workspace.cjs');
 const agent = require('./agent.cjs');
 const agentState = require('./agent-state.cjs');
@@ -145,6 +148,33 @@ function registerIpc() {
     if (!String(name || '').startsWith('agent')) wakeProactive(`module:${name}`);
     return result;
   });
+  ipcMain.handle('backup:list', () => store.listBackups());
+  ipcMain.handle('backup:create', () => store.createBackup());
+  ipcMain.handle('backup:restore', async (_event, id) => {
+    const selected = store.listBackups().find((item) => item.id === String(id || ''));
+    if (!selected) throw new Error('找不到所选备份');
+    const response = await dialog.showMessageBox({
+      type: 'warning',
+      buttons: ['取消', '恢复备份'],
+      defaultId: 0,
+      cancelId: 0,
+      title: '恢复数据',
+      message: '恢复会替换当前工作台数据',
+      detail: `将恢复 ${new Date(selected.createdAt).toLocaleString('zh-CN')} 创建的备份。恢复前会自动保留当前版本；邮件授权、Agent 密钥和同步令牌不会被备份或覆盖。`,
+    });
+    if (response.response !== 1) return { restored: false };
+    return { restored: true, ...store.restoreBackup(selected.id) };
+  });
+  ipcMain.handle('backup:export', async () => {
+    const result = await dialog.showSaveDialog({
+      title: '导出 Loom 数据',
+      defaultPath: `loom-export-${new Date().toISOString().slice(0, 10)}.json`,
+      filters: [{ name: 'JSON 数据', extensions: ['json'] }],
+    });
+    if (result.canceled || !result.filePath) return { saved: false };
+    fs.writeFileSync(result.filePath, JSON.stringify(store.exportSafeData(), null, 2), 'utf8');
+    return { saved: true, filePath: result.filePath };
+  });
   ipcMain.handle('library:import-file', async (_event, categoryId = '') => {
     const result = await dialog.showOpenDialog({
       title: '导入资料文件',
@@ -173,6 +203,8 @@ function registerIpc() {
   ipcMain.handle('library:preview-file', (_event, id) => library.previewFile(id));
 
   ipcMain.handle('workspace:snapshot', () => workspace.snapshot());
+  ipcMain.handle('today:get-snapshot', () => today.buildSnapshot());
+  ipcMain.handle('weekly:get-snapshot', () => weekly.buildSnapshot());
   ipcMain.handle('workspace:list-todos', () => workspace.listTodos());
   ipcMain.handle('workspace:create-todo', (_event, input) => {
     const todos = workspace.createTodo(input);
@@ -334,6 +366,7 @@ function registerIpc() {
 
 app.whenReady().then(() => {
   store.init(app.getPath('userData'));
+  workspace.repairPersonalDateTodos();
   mail.init({ safeStorage });
   music.init(app.getPath('userData'));
   library.init(app.getPath('userData'));

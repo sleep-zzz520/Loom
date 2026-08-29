@@ -5,7 +5,8 @@ const notifier = require('./notifier.cjs');
 const mail = require('./mail.cjs');
 
 const CHECK_INTERVAL = 60_000;
-const MAIL_CHECK_INTERVAL = 120_000;
+// IMAP 轮询而非常驻 IDLE：每 30 秒检查一次，在及时性与常驻连接稳定性之间取平衡。
+const MAIL_CHECK_INTERVAL = 30_000;
 const EVENT_DEBOUNCE = 15_000;
 const MAX_EVENT_RUNS_PER_DAY = 3;
 const MAX_RUNS = 120;
@@ -17,6 +18,7 @@ const MAX_TIMER_DELAY = 2_147_483_647;
 const DAILY_TRIGGER = 'daily-briefing';
 const EVENT_TRIGGER = 'event-follow-up';
 const MAIL_TRIGGER = 'mail-triage';
+const MAIL_PRIORITY_LABEL = { high: '高优先级邮件', medium: '中优先级邮件', low: '低优先级邮件' };
 
 let checkTimer = null;
 let mailCheckTimer = null;
@@ -166,6 +168,7 @@ function announceAlert(suggestion, directMessage, phase) {
       title: String(suggestion.title || '').slice(0, 160),
       summary: String(suggestion.summary || '').slice(0, 300),
       reason: String(suggestion.reason || '').slice(0, 300),
+      ...(normaliseMailPriority(suggestion.priority) ? { priority: suggestion.priority } : {}),
       createdAt: new Date().toISOString(),
     });
   } catch (error) {
@@ -212,6 +215,10 @@ function normaliseRunContext(value) {
   return Array.isArray(value) ? value.filter((item) => allowed.has(item)) : [];
 }
 
+function normaliseMailPriority(value) {
+  return ['high', 'medium', 'low'].includes(value) ? value : null;
+}
+
 function directMessageContent(suggestion, phase) {
   const persona = agent.getPersona(store.getSettings());
   const isFollowUp = phase === 'follow-up';
@@ -219,6 +226,7 @@ function directMessageContent(suggestion, phase) {
     ? `${persona.name} 来跟进一下「${suggestion.title}」。`
     : `${persona.name} 想主动和你说一件事：「${suggestion.title}」。`;
   const reason = String(suggestion.reason || '').trim();
+  const mailPriority = suggestion.trigger === MAIL_TRIGGER ? normaliseMailPriority(suggestion.priority) : null;
   const closing = suggestion.proposal
     ? persona.proactiveStyle === 'important'
       ? '需要的话，我可以帮你安排下一步。'
@@ -226,7 +234,7 @@ function directMessageContent(suggestion, phase) {
     : persona.proactiveStyle === 'companion'
       ? '如果方便，直接告诉我你现在的进展；我会继续陪你一起推进。'
       : '你可以直接回复我当前进展，我会继续和你一起推进。';
-  return [intro, String(suggestion.summary || '').trim(), reason ? `我注意到：${reason}` : '', closing]
+  return [intro, mailPriority ? `我将它归为${MAIL_PRIORITY_LABEL[mailPriority]}。` : '', String(suggestion.summary || '').trim(), reason ? `我注意到：${reason}` : '', closing]
     .filter(Boolean)
     .join('\n\n')
     .slice(0, 1800);
@@ -306,6 +314,7 @@ function saveSuggestion(result, now, options = {}) {
     reason: result.reason,
     references: result.references || [],
     proposal: result.proposal || null,
+    priority: trigger === MAIL_TRIGGER ? normaliseMailPriority(result.priority) : null,
     goalId: result.goalId || result.proposal?.goalId || null,
     status: 'unread',
     createdAt: now.toISOString(),
@@ -371,11 +380,14 @@ function showDesktopNotification(suggestion, directMessage = null) {
     const { Notification } = require('electron');
     if (!Notification) return;
     if (typeof Notification.isSupported === 'function' && !Notification.isSupported()) return;
+    const mailPriority = suggestion.trigger === MAIL_TRIGGER ? normaliseMailPriority(suggestion.priority) : null;
     const notification = new Notification({
-      title: `${agent.getPersona(store.getSettings()).name} 主动消息`,
+      title: mailPriority
+        ? `${agent.getPersona(store.getSettings()).name} · ${MAIL_PRIORITY_LABEL[mailPriority]}`
+        : `${agent.getPersona(store.getSettings()).name} 主动消息`,
       body: `${suggestion.title}\n${suggestion.summary}`.slice(0, 300),
       // macOS uses the bundled system alert sound; other platforms safely ignore this option.
-      sound: 'Glass',
+      ...(mailPriority === 'high' ? { sound: 'Glass' } : {}),
     });
     notification.on('click', () => onOpenAgent(directMessage?.id || suggestion.messageId || ''));
     notification.show();
@@ -583,7 +595,6 @@ function deliverMailSuggestion(suggestion, now, notify) {
   if (suggestion.notifiedAt || !notify) return 'in-app';
   const settings = store.getSettings();
   if (notifier.isWithinQuietHours(settings.notify?.quietHours, now)) return 'in-app';
-  if (availableNotificationSlots(settings, now) <= 0) return 'in-app';
   const directMessage = { id: suggestion.messageId };
   showDesktopNotification(suggestion, directMessage);
   announceAlert(suggestion, directMessage, 'initial');
@@ -595,7 +606,12 @@ function deliverMailSuggestion(suggestion, now, notify) {
  * 用 IMAP UID 游标增量检查收件箱。首次启用或账号/UIDVALIDITY 改变时只建立基线，
  * 不回溯旧信，避免一次性对历史广告和旧招聘信制造提醒。
  */
-async function checkInbox({ now = new Date(), notify = true, mailApi = mail, triage = agent.triageIncomingMail } = {}) {
+async function checkInbox({
+  now = new Date(),
+  notify = true,
+  mailApi = mail,
+  triage = agent.triageIncomingMail,
+} = {}) {
   if (mailRunning) return [];
   const settings = store.getSettings();
   if (settings.agent?.proactiveEnabled === false || settings.agent?.emailMonitorEnabled !== true || !agent.getStatus(settings)) return [];
@@ -624,7 +640,10 @@ async function checkInbox({ now = new Date(), notify = true, mailApi = mail, tri
     const incoming = Array.isArray(result.messages) ? result.messages : [];
     const candidates = incoming.filter((message) => !message?.locallyFiltered);
     const decisions = candidates.length ? await triage(settings, candidates) : [];
-    // 分诊完成（包括“均不重要”）后再推进游标；模型失败时保留游标，稍后安全重试。
+    if (decisions.length !== candidates.length) {
+      throw new Error('邮件分诊结果不完整，将在下次检查时重试');
+    }
+    // 分诊完成（包括垃圾邮件）后再推进游标；模型失败或结果不完整时保留游标，稍后安全重试。
     saveMailWatchState({
       account: account.user,
       folder: result.folder,
@@ -633,7 +652,7 @@ async function checkInbox({ now = new Date(), notify = true, mailApi = mail, tri
       initialized: true,
     });
 
-    const saved = decisions.map((decision) => {
+    const saved = decisions.filter((decision) => decision?.priority !== 'junk').map((decision) => {
       const source = decision.source || {};
       const suggestion = saveSuggestion({
         title: decision.title,
@@ -641,6 +660,7 @@ async function checkInbox({ now = new Date(), notify = true, mailApi = mail, tri
         reason: decision.reason,
         references: decision.references,
         proposal: decision.proposal,
+        priority: decision.priority,
       }, now, {
         trigger: MAIL_TRIGGER,
         dedupeKey: `mail:${account.user}:${result.uidValidity}:${source.folder}:${source.uid}`,
@@ -670,7 +690,7 @@ function start(options = {}) {
   checkTimer = setInterval(() => { void checkNow(); }, CHECK_INTERVAL);
   mailCheckTimer = setInterval(() => { void checkInbox(); }, MAIL_CHECK_INTERVAL);
   mailCheckTimer.unref?.();
-  console.log('[proactive] 主动简报检查已启动（间隔 60 秒，每天最多一次）');
+  console.log('[proactive] 主动简报检查已启动（简报 60 秒；邮件 30 秒）');
 }
 
 function stop() {
@@ -776,12 +796,25 @@ if (process.env.WORKBENCH_PROACTIVE_SELF_TEST === '1') {
       listInboxForAgent: async (afterUid) => {
         if (afterUid === null) return { initialized: true, folder: 'INBOX', uidValidity: 11, nextUid: 40, messages: [] };
         if (inboxStep === 0) return { initialized: false, folder: 'INBOX', uidValidity: 11, nextUid: 41, messages: [{ uid: 41, folder: 'INBOX', subject: '面试时间确认', locallyFiltered: false }] };
-        return { initialized: false, folder: 'INBOX', uidValidity: 11, nextUid: 42, messages: [{ uid: 42, folder: 'INBOX', subject: '会员优惠', locallyFiltered: true }] };
+        if (inboxStep === 1) return { initialized: false, folder: 'INBOX', uidValidity: 11, nextUid: 42, messages: [{ uid: 42, folder: 'INBOX', subject: '会员优惠', locallyFiltered: true }] };
+        return { initialized: false, folder: 'INBOX', uidValidity: 11, nextUid: 43, messages: [{ uid: 43, folder: 'INBOX', subject: '推广订阅', locallyFiltered: false }] };
       },
     };
     const fakeTriage = async (_settings, messages) => {
       triageInputs.push(messages.map((message) => message.uid));
+      if (messages[0]?.uid === 43) {
+        return [{
+          priority: 'junk',
+          title: '推广订阅',
+          summary: '这是一封推广订阅邮件。',
+          reason: '没有需要用户处理的事项。',
+          references: [{ type: 'mail', id: 'INBOX:43', label: '推广订阅' }],
+          proposal: null,
+          source: messages[0],
+        }];
+      }
       return [{
+        priority: 'high',
         title: '需要确认面试时间',
         summary: '招聘方邀请你确认面试时间。',
         reason: '邮件要求在近期回复。',
@@ -795,12 +828,17 @@ if (process.env.WORKBENCH_PROACTIVE_SELF_TEST === '1') {
     const mailSuggestions = await checkInbox({ now: directNow, notify: false, mailApi: fakeMail, triage: fakeTriage });
     assert.equal(mailSuggestions.length, 1);
     assert.equal(mailSuggestions[0].trigger, MAIL_TRIGGER);
+    assert.equal(mailSuggestions[0].priority, 'high');
     assert.equal(mailSuggestions[0].proposal?.kind, 'create_todo');
     assert.deepEqual(triageInputs, [[41]]);
     inboxStep = 1;
     await checkInbox({ now: directNow, notify: false, mailApi: fakeMail, triage: fakeTriage });
     assert.deepEqual(triageInputs, [[41]]);
     assert.equal(store.getModule('agentMailWatch').lastUid, 42);
+    inboxStep = 2;
+    assert.deepEqual(await checkInbox({ now: directNow, notify: false, mailApi: fakeMail, triage: fakeTriage }), []);
+    assert.deepEqual(triageInputs, [[41], [43]]);
+    assert.equal(store.getModule('agentMailWatch').lastUid, 43);
     updateSuggestion(actionableSuggestion.id, { status: 'unread', followUpAt: null });
     assert.equal(listSuggestions().find((item) => item.id === actionableSuggestion.id)?.id, actionableSuggestion.id);
     assert.equal(listSuggestionHistory().find((item) => item.id === actionableSuggestion.id), undefined);

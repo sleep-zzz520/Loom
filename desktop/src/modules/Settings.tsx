@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type ChangeEvent, type FormEvent } from 'react';
 import type { SettingsKey } from '../App';
-import type { AppSettings, NotificationHistoryItem } from '../types';
+import type { AppSettings, BackupRecord, NotificationHistoryItem } from '../types';
 import { TimeField } from '../components/DateFields';
 import { AVATAR_ACCEPT, avatarUploadError } from './profileAvatar';
 
@@ -38,6 +38,9 @@ export default function Settings({ section }: SettingsProps) {
   const avatarInputRef = useRef<HTMLInputElement>(null);
   const avatarReadRevisionRef = useRef(0);
   const [avatarError, setAvatarError] = useState('');
+  const [backups, setBackups] = useState<BackupRecord[]>([]);
+  const [backupBusy, setBackupBusy] = useState(false);
+  const [backupMessage, setBackupMessage] = useState('');
 
   useEffect(() => {
     Promise.all([
@@ -48,6 +51,18 @@ export default function Settings({ section }: SettingsProps) {
       setHistory(nextHistory);
     }).catch(() => {});
   }, []);
+
+  const loadBackups = useCallback(async () => {
+    try {
+      setBackups(await window.workbench.backup.list());
+    } catch {
+      setBackupMessage('备份列表暂时无法读取。');
+    }
+  }, []);
+
+  useEffect(() => {
+    if (section === 'settings-config') void loadBackups();
+  }, [section, loadBackups]);
 
   const persistSettings = useCallback(async (nextSettings: AppSettings) => {
     const revision = saveRevisionRef.current;
@@ -164,6 +179,54 @@ export default function Settings({ section }: SettingsProps) {
       image.src = avatarDataUrl;
     };
     reader.readAsDataURL(file);
+  }
+
+  async function createBackup() {
+    if (backupBusy) return;
+    setBackupBusy(true);
+    setBackupMessage('');
+    try {
+      await window.workbench.backup.create();
+      await loadBackups();
+      setBackupMessage('已创建当前数据的恢复点。');
+    } catch {
+      setBackupMessage('创建备份失败，请稍后重试。');
+    } finally {
+      setBackupBusy(false);
+    }
+  }
+
+  async function exportData() {
+    if (backupBusy) return;
+    setBackupBusy(true);
+    setBackupMessage('');
+    try {
+      const result = await window.workbench.backup.exportData();
+      setBackupMessage(result.saved ? '数据已导出。导出文件不包含授权码、API 密钥和同步令牌。' : '已取消导出。');
+    } catch {
+      setBackupMessage('导出失败，请稍后重试。');
+    } finally {
+      setBackupBusy(false);
+    }
+  }
+
+  async function restoreBackup(id: string) {
+    if (backupBusy) return;
+    setBackupBusy(true);
+    setBackupMessage('');
+    try {
+      const result = await window.workbench.backup.restore(id);
+      if (result.restored) {
+        await loadBackups();
+        setBackupMessage('已恢复备份；当前版本已自动保留为新的恢复点。');
+      } else {
+        setBackupMessage('已取消恢复。');
+      }
+    } catch {
+      setBackupMessage('恢复失败，当前数据没有被替换。');
+    } finally {
+      setBackupBusy(false);
+    }
   }
 
   return (
@@ -550,7 +613,7 @@ export default function Settings({ section }: SettingsProps) {
             <label className={`settings-toggle${settings.agent.emailMonitorEnabled ? ' is-on' : ''}`}>
               <span className="settings-toggle-copy">
                 <strong>智能邮件提醒</strong>
-                <small>每两分钟检查新邮件；先在本地过滤营销邮件，再把少量候选摘要交给已配置的 Agent 判断。不会自动发送邮件或创建待办。</small>
+                <small>每 30 秒检查新邮件；营销邮件会在本地直接静默过滤，其余邮件由已配置的 Agent 分为高、中、低、垃圾四级。垃圾邮件不提示；需要行动时只生成待确认的待办建议。</small>
               </span>
               <input
                 type="checkbox"
@@ -620,6 +683,22 @@ export default function Settings({ section }: SettingsProps) {
               </label>
             </div>
           </details>
+          <section className="settings-subsection settings-subsection--recovery" aria-labelledby="data-recovery-title">
+            <div className="settings-subsection-head">
+              <div>
+                <h3 id="data-recovery-title">数据与恢复</h3>
+                <p>自动恢复点会在数据变更前保留近期版本。导出与备份不会包含邮箱授权、Agent 密钥或同步令牌。</p>
+              </div>
+            </div>
+            <div className="settings-recovery-actions">
+              <button type="button" className="settings-recovery-primary" onClick={() => void createBackup()} disabled={backupBusy}>立即备份</button>
+              <button type="button" className="settings-recovery-secondary" onClick={() => void exportData()} disabled={backupBusy}>导出数据</button>
+            </div>
+            {backupMessage && <p className="settings-recovery-message" role="status">{backupMessage}</p>}
+            {backups.length ? <div className="settings-backup-list" aria-label="可恢复的数据版本">
+              {backups.slice(0, 6).map((backup) => <div key={backup.id} className="settings-backup-item"><span><strong>{backup.reason === 'manual' ? '手动备份' : backup.reason === 'pre-restore' ? '恢复前保护' : '自动恢复点'}</strong><small>{new Date(backup.createdAt).toLocaleString('zh-CN', { hour12: false })} · {Math.max(1, Math.round(backup.size / 1024))} KB</small></span><button type="button" onClick={() => void restoreBackup(backup.id)} disabled={backupBusy}>恢复此版本</button></div>)}
+            </div> : <p className="settings-recovery-empty">暂无恢复点；保存数据后会自动创建。</p>}
+          </section>
           </>}
           </div>
           <footer className="settings-save-bar">

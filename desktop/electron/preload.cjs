@@ -41,6 +41,18 @@ contextBridge.exposeInMainWorld('workbench', {
     getModule: (name) => ipcRenderer.invoke('data:get-module', name),
     setModule: (name, items) => ipcRenderer.invoke('data:set-module', name, items),
   },
+  backup: {
+    list: () => ipcRenderer.invoke('backup:list'),
+    create: () => ipcRenderer.invoke('backup:create'),
+    restore: (id) => ipcRenderer.invoke('backup:restore', id),
+    exportData: () => ipcRenderer.invoke('backup:export'),
+  },
+  today: {
+    getSnapshot: () => ipcRenderer.invoke('today:get-snapshot'),
+  },
+  weekly: {
+    getSnapshot: () => ipcRenderer.invoke('weekly:get-snapshot'),
+  },
   library: {
     importFile: (categoryId = '') => ipcRenderer.invoke('library:import-file', categoryId),
     createDocument: (categoryId = '') => ipcRenderer.invoke('library:create-document', categoryId),
