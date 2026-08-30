@@ -113,6 +113,7 @@ export default function Music({
   const [playlistMutation, setPlaylistMutation] = useState<{ playlistId: number; trackId: number } | null>(null);
   const [playlistActionStates, setPlaylistActionStates] = useState<Record<number, PlaylistActionVisualState>>({});
   const [playlistActionError, setPlaylistActionError] = useState<PlaylistActionError | null>(null);
+  const playlistOperationIdsRef = useRef<Record<string, string>>({});
   const activeLyricIndex = useMemo(() => activeLyricLineIndex(lyrics, currentTime), [lyrics, currentTime]);
   const ownedPlaylists = ownPlaylists(library);
   const favoritePlaylist = likedPlaylist(library);
@@ -674,7 +675,11 @@ export default function Music({
     setPlaylistMutation({ playlistId: playlist.id, trackId: track.id });
     setPlaylistActionError(null);
     try {
-      const result = await window.workbench.music.addToPlaylist(playlist.id, track.id);
+      const operationKey = `add:${playlist.id}:${track.id}`;
+      const operationId = playlistOperationIdsRef.current[operationKey]
+        || (await window.workbench.music.preparePlaylistMutation('add', playlist.id, track.id)).operationId;
+      playlistOperationIdsRef.current[operationKey] = operationId;
+      const result = await window.workbench.music.addToPlaylist(playlist.id, track.id, operationId);
       setLibrary(result.library);
       if (activePlaylistId === playlist.id) setResults(result.tracks);
       setPlaylistActionStates((current) => {
@@ -688,6 +693,7 @@ export default function Music({
         };
       });
       setPlaylistPickerTrack(null);
+      delete playlistOperationIdsRef.current[operationKey];
     } catch (err) {
       showPlaylistActionError(track.id, action, err instanceof Error ? err.message : '添加到歌单失败，请稍后重试。');
     } finally {

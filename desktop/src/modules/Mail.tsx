@@ -207,6 +207,7 @@ export default function MailModule() {
   const [savingAccount, setSavingAccount] = useState(false);
   const [testingConnection, setTestingConnection] = useState(false);
   const [sending, setSending] = useState(false);
+  const [sendOperationId, setSendOperationId] = useState<string | null>(null);
   const [connectionStatus, setConnectionStatus] = useState<MailConnectionStatus | null>(null);
   const [mailboxError, setMailboxError] = useState('');
   const [messageError, setMessageError] = useState('');
@@ -356,6 +357,7 @@ export default function MailModule() {
       text: '',
       inReplyTo: message.messageId || undefined,
     });
+    setSendOperationId(null);
     setComposerError('');
     setComposerStatus('');
     setComposerOpen(true);
@@ -367,9 +369,12 @@ export default function MailModule() {
     setComposerError('');
     setComposerStatus('');
     try {
-      const result = await window.workbench.mail.send(composer);
+      const operationId = sendOperationId || (await window.workbench.mail.prepareSend(composer)).operationId;
+      setSendOperationId(operationId);
+      const result = await window.workbench.mail.send(composer, operationId);
       setComposerStatus(sendStatusText(result));
       setComposer(emptyComposer());
+      setSendOperationId(null);
     } catch (error) {
       setComposerError(errorText(error));
     } finally {
@@ -538,6 +543,7 @@ export default function MailModule() {
                 className="btn-primary mail-compose-trigger"
                 onClick={() => {
                   setComposer(emptyComposer());
+                  setSendOperationId(null);
                   setComposerError('');
                   setComposerStatus('');
                   setComposerOpen(true);
@@ -709,7 +715,7 @@ export default function MailModule() {
                 <span className="mail-section-kicker"><PenLine size={14} />新邮件</span>
                 <h2 id="mail-compose-title">写邮件</h2>
               </div>
-              <button type="button" className="mail-close-settings" onClick={() => setComposerOpen(false)} disabled={sending} aria-label="关闭写邮件窗口">
+              <button type="button" className="mail-close-settings" onClick={() => { setComposerOpen(false); setSendOperationId(null); }} disabled={sending} aria-label="关闭写邮件窗口">
                 <X size={17} />
               </button>
             </header>

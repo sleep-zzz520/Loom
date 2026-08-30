@@ -90,8 +90,9 @@ contextBridge.exposeInMainWorld('workbench', {
     checkQrLogin: (key) => invokeMusic('music:qr-check', key),
     syncAccount: () => invokeMusic('music:sync-account'),
     syncPlaylist: (id) => invokeMusic('music:sync-playlist', id),
-    addToPlaylist: (playlistId, trackId) => invokeMusic('music:add-to-playlist', playlistId, trackId),
-    removeFromPlaylist: (playlistId, trackId) => invokeMusic('music:remove-from-playlist', playlistId, trackId),
+    preparePlaylistMutation: (operation, playlistId, trackId) => invokeMusic('music:prepare-playlist-mutation', operation, playlistId, trackId),
+    addToPlaylist: (playlistId, trackId, operationId) => invokeMusic('music:add-to-playlist', playlistId, trackId, operationId),
+    removeFromPlaylist: (playlistId, trackId, operationId) => invokeMusic('music:remove-from-playlist', playlistId, trackId, operationId),
     logout: () => invokeMusic('music:logout'),
   },
   mail: {
@@ -101,7 +102,8 @@ contextBridge.exposeInMainWorld('workbench', {
     list: (folder, limit) => ipcRenderer.invoke('mail:list', folder, limit),
     getMessage: (folder, uid) => ipcRenderer.invoke('mail:get-message', folder, uid),
     markRead: (folder, uid) => ipcRenderer.invoke('mail:mark-read', folder, uid),
-    send: (input) => ipcRenderer.invoke('mail:send', input),
+    prepareSend: (input) => ipcRenderer.invoke('mail:prepare-send', input),
+    send: (input, operationId) => ipcRenderer.invoke('mail:send', input, operationId),
   },
   agent: {
     status: () => ipcRenderer.invoke('agent:status'),

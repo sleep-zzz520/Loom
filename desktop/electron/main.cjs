@@ -14,6 +14,7 @@ const library = require('./library.cjs');
 const music = require('./music.cjs');
 const musicService = require('./music-service.cjs');
 const mail = require('./mail.cjs');
+const operations = require('./operations.cjs');
 
 const isDev = Boolean(process.env.VITE_DEV_SERVER_URL);
 let mainWindow = null;
@@ -127,6 +128,52 @@ function withoutEmailPassword(patch) {
   if (!patch || typeof patch !== 'object' || !patch.email || typeof patch.email !== 'object') return patch;
   const { pass: _password, ...email } = patch.email;
   return { ...patch, email };
+}
+
+function musicOperationPayload(operation, playlistId, trackId) {
+  const type = String(operation || '').trim();
+  const playlist = Number(playlistId);
+  const track = Number(trackId);
+  if (!['add', 'del'].includes(type)) throw new Error('歌单操作无效');
+  if (!Number.isFinite(playlist) || playlist <= 0) throw new Error('歌单标识无效');
+  if (!Number.isFinite(track) || track <= 0) throw new Error('歌曲标识无效');
+  return { operation: type, playlistId: playlist, trackId: track };
+}
+
+function prepareAgentProposal(proposal) {
+  if (!proposal || typeof proposal !== 'object') return proposal;
+  const operation = operations.prepare('agent:confirm', proposal);
+  return { ...proposal, operationId: operation.id };
+}
+
+async function readMusicMutationResult(payload) {
+  const settings = getMusicSettings();
+  const library = await music.syncAccount(settings, store);
+  const refreshed = await music.syncPlaylistTracks(payload.playlistId, settings, store);
+  const playlist = refreshed.library.playlists.find((item) => Number(item.id) === payload.playlistId)
+    || library.playlists.find((item) => Number(item.id) === payload.playlistId);
+  if (!playlist) throw new Error('未找到该歌单，请先同步网易云歌单');
+  return { playlist, tracks: refreshed.tracks, library: refreshed.library };
+}
+
+async function executeMusicOperation(operationId, payload) {
+  const execution = await operations.execute(operationId, 'music:playlist', payload, '歌单操作', async () => {
+    const settings = getMusicSettings();
+    return payload.operation === 'add'
+      ? music.addToPlaylist(payload.playlistId, payload.trackId, settings, store)
+      : music.removeFromPlaylist(payload.playlistId, payload.trackId, settings, store);
+  }, {
+    resultForLedger: () => ({ playlistId: payload.playlistId, trackId: payload.trackId, operation: payload.operation }),
+  });
+  // 首次成功保留实时回拉结果；重放成功操作时只做只读同步，避免在账本内复制整个歌单。
+  return execution.replayed ? readMusicMutationResult(payload) : execution.result;
+}
+
+async function executeMailOperation(operationId, input) {
+  const payload = mail.normaliseSendInput(input);
+  const execution = await operations.execute(operationId, 'mail:send', payload, '邮件投递', () => mail.sendMessage(input, { operationId }));
+  if (!execution.result) throw operations.unknownOutcome('邮件投递');
+  return execution.result;
 }
 
 function registerIpc() {
@@ -255,8 +302,16 @@ function registerIpc() {
   ipcMain.handle('music:qr-check', (_event, key) => music.checkQrLogin(key, getMusicSettings(), store));
   ipcMain.handle('music:sync-account', () => music.syncAccount(getMusicSettings(), store));
   ipcMain.handle('music:sync-playlist', (_event, id) => music.syncPlaylistTracks(id, getMusicSettings(), store));
-  ipcMain.handle('music:add-to-playlist', (_event, playlistId, trackId) => music.addToPlaylist(playlistId, trackId, getMusicSettings(), store));
-  ipcMain.handle('music:remove-from-playlist', (_event, playlistId, trackId) => music.removeFromPlaylist(playlistId, trackId, getMusicSettings(), store));
+  ipcMain.handle('music:prepare-playlist-mutation', (_event, operation, playlistId, trackId) => {
+    const payload = musicOperationPayload(operation, playlistId, trackId);
+    return { operationId: operations.prepare('music:playlist', payload).id };
+  });
+  ipcMain.handle('music:add-to-playlist', (_event, playlistId, trackId, operationId) =>
+    executeMusicOperation(operationId, musicOperationPayload('add', playlistId, trackId))
+  );
+  ipcMain.handle('music:remove-from-playlist', (_event, playlistId, trackId, operationId) =>
+    executeMusicOperation(operationId, musicOperationPayload('del', playlistId, trackId))
+  );
   ipcMain.handle('music:logout', () => music.logout(getMusicSettings(), store));
   ipcMain.handle('mail:account', () => mail.account());
   ipcMain.handle('mail:save-account', (_event, input) => {
@@ -268,40 +323,54 @@ function registerIpc() {
   ipcMain.handle('mail:list', (_event, folder, limit) => mail.listMailbox(folder, limit));
   ipcMain.handle('mail:get-message', (_event, folder, uid) => mail.getMessage(folder, uid));
   ipcMain.handle('mail:mark-read', (_event, folder, uid) => mail.markRead(folder, uid));
-  ipcMain.handle('mail:send', (_event, input) => mail.sendMessage(input));
+  ipcMain.handle('mail:prepare-send', (_event, input) => {
+    const payload = mail.normaliseSendInput(input);
+    return { operationId: operations.prepare('mail:send', payload).id };
+  });
+  ipcMain.handle('mail:send', (_event, input, operationId) => executeMailOperation(operationId, input));
   ipcMain.handle('agent:status', () => agent.getStatus(store.getSettings()));
-  ipcMain.handle('agent:chat', (event, messages) =>
-    agent.runAgent(messages, store.getSettings(), (delta) => {
+  ipcMain.handle('agent:chat', async (event, messages) => {
+    const reply = await agent.runAgent(messages, store.getSettings(), (delta) => {
       event.sender.send('agent:stream', delta);
     }, {
       onMusicCommand: (command) => event.sender.send('agent:music-command', command),
       musicState: agentMusicState,
-    })
-  );
+    });
+    return reply.proposal ? { ...reply, proposal: prepareAgentProposal(reply.proposal) } : reply;
+  });
   ipcMain.handle('agent:confirm-proposal', async (_event, proposal) => {
     const musicProposal = agent.normaliseMusicProposal(proposal);
     const emailProposal = agent.normaliseEmailProposal(proposal);
-    const result = musicProposal
-      ? await (musicProposal.kind === 'add_music_to_playlist'
-        ? music.addToPlaylist(musicProposal.playlistId, musicProposal.trackId, getMusicSettings(), store)
-        : music.removeFromPlaylist(musicProposal.playlistId, musicProposal.trackId, getMusicSettings(), store))
-      : emailProposal
-        ? await mail.sendMessage(emailProposal)
-      : agent.confirmProposal(proposal);
-    notifyAgentStateChanged();
-    if (emailProposal) {
-      const accepted = result.accepted?.join('、') || emailProposal.to;
-      const rejected = result.rejected?.length ? `；未被发件服务器接受：${result.rejected.join('、')}` : '';
-      const deliveryNotice = result.dsnSupported
-        ? '已请求失败或延迟的投递回执。'
-        : '发件服务器不支持下游投递回执。';
-      return { content: `邮件“${emailProposal.subject}”已交给发件服务器，已接受收件人：${accepted}${rejected}。${deliveryNotice}对方邮箱何时入箱仍取决于后续投递。` };
-    }
-    if (!musicProposal) return result;
-    const actionText = musicProposal.kind === 'add_music_to_playlist'
-      ? `已将“${musicProposal.trackTitle}”添加到「${result.playlist.name}」`
-      : `已将“${musicProposal.trackTitle}”从「${result.playlist.name}」移除`;
-    return { content: `${actionText}，已同步到网易云音乐。` };
+    const label = emailProposal ? '邮件投递' : musicProposal ? '歌单操作' : '已确认操作';
+    const execution = await operations.execute(proposal?.operationId, 'agent:confirm', proposal, label, async () => {
+      const result = musicProposal
+        ? await (musicProposal.kind === 'add_music_to_playlist'
+          ? music.addToPlaylist(musicProposal.playlistId, musicProposal.trackId, getMusicSettings(), store)
+          : music.removeFromPlaylist(musicProposal.playlistId, musicProposal.trackId, getMusicSettings(), store))
+        : emailProposal
+          ? await mail.sendMessage(emailProposal, { operationId: proposal.operationId })
+          : agent.confirmProposal(proposal);
+      notifyAgentStateChanged();
+      let response;
+      if (emailProposal) {
+        const accepted = result.accepted?.join('、') || emailProposal.to;
+        const rejected = result.rejected?.length ? `；未被发件服务器接受：${result.rejected.join('、')}` : '';
+        const deliveryNotice = result.dsnSupported
+          ? '已请求失败或延迟的投递回执。'
+          : '发件服务器不支持下游投递回执。';
+        response = { content: `邮件“${emailProposal.subject}”已交给发件服务器，已接受收件人：${accepted}${rejected}。${deliveryNotice}对方邮箱何时入箱仍取决于后续投递。` };
+      } else if (!musicProposal) {
+        response = result;
+      } else {
+        const actionText = musicProposal.kind === 'add_music_to_playlist'
+          ? `已将“${musicProposal.trackTitle}”添加到「${result.playlist.name}」`
+          : `已将“${musicProposal.trackTitle}”从「${result.playlist.name}」移除`;
+        response = { content: `${actionText}，已同步到网易云音乐。` };
+      }
+      return response;
+    });
+    if (!execution.result) throw operations.unknownOutcome(label);
+    return execution.result;
   });
   ipcMain.handle('agent:get-suggestions', () => proactive.listSuggestions());
   ipcMain.handle('agent:get-suggestion-history', () => proactive.listSuggestionHistory());

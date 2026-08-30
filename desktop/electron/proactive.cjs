@@ -1,6 +1,7 @@
 const store = require('./store.cjs');
 const agent = require('./agent.cjs');
 const agentState = require('./agent-state.cjs');
+const operations = require('./operations.cjs');
 const notifier = require('./notifier.cjs');
 const mail = require('./mail.cjs');
 
@@ -305,6 +306,11 @@ function saveSuggestion(result, now, options = {}) {
   const dedupeKey = options.dedupeKey || `${trigger}:${dateKey}`;
   const existing = store.getModule('agentSuggestions').find((suggestion) => suggestion.dedupeKey === dedupeKey);
   if (existing) return existing;
+  const proposal = result.proposal && typeof result.proposal === 'object'
+    ? (result.proposal.operationId
+      ? result.proposal
+      : { ...result.proposal, operationId: operations.prepare('agent:confirm', result.proposal).id })
+    : null;
   const suggestion = {
     id: store.newId(),
     dedupeKey,
@@ -313,9 +319,9 @@ function saveSuggestion(result, now, options = {}) {
     summary: result.summary,
     reason: result.reason,
     references: result.references || [],
-    proposal: result.proposal || null,
+    proposal,
     priority: trigger === MAIL_TRIGGER ? normaliseMailPriority(result.priority) : null,
-    goalId: result.goalId || result.proposal?.goalId || null,
+    goalId: result.goalId || proposal?.goalId || null,
     status: 'unread',
     createdAt: now.toISOString(),
     updatedAt: now.toISOString(),
@@ -643,15 +649,8 @@ async function checkInbox({
     if (decisions.length !== candidates.length) {
       throw new Error('邮件分诊结果不完整，将在下次检查时重试');
     }
-    // 分诊完成（包括垃圾邮件）后再推进游标；模型失败或结果不完整时保留游标，稍后安全重试。
-    saveMailWatchState({
-      account: account.user,
-      folder: result.folder,
-      uidValidity: result.uidValidity,
-      lastUid: result.nextUid,
-      initialized: true,
-    });
-
+    // 先持久化每封邮件的 UID 去重建议，再推进游标。若进程在中间退出，下次会安全地
+    // 命中同一 dedupeKey，而不会因游标已推进却尚未保存建议造成漏提醒。
     const saved = decisions.filter((decision) => decision?.priority !== 'junk').map((decision) => {
       const source = decision.source || {};
       const suggestion = saveSuggestion({
@@ -667,6 +666,14 @@ async function checkInbox({
       });
       deliverMailSuggestion(suggestion, now, notify);
       return suggestion;
+    });
+    // 分诊、建议持久化与通知状态都完成后才推进游标；模型失败或异常退出时保留游标，稍后安全重试。
+    saveMailWatchState({
+      account: account.user,
+      folder: result.folder,
+      uidValidity: result.uidValidity,
+      lastUid: result.nextUid,
+      initialized: true,
     });
     if (saved.length) notifyUpdated();
     return saved;
@@ -830,6 +837,7 @@ if (process.env.WORKBENCH_PROACTIVE_SELF_TEST === '1') {
     assert.equal(mailSuggestions[0].trigger, MAIL_TRIGGER);
     assert.equal(mailSuggestions[0].priority, 'high');
     assert.equal(mailSuggestions[0].proposal?.kind, 'create_todo');
+    assert.match(mailSuggestions[0].proposal?.operationId || '', /^[0-9a-f-]{36}$/i);
     assert.deepEqual(triageInputs, [[41]]);
     inboxStep = 1;
     await checkInbox({ now: directNow, notify: false, mailApi: fakeMail, triage: fakeTriage });

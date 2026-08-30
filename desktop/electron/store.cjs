@@ -11,7 +11,7 @@ const MAX_RECENT_AUTOMATIC_BACKUPS = 10;
 const DAILY_BACKUP_RETENTION_DAYS = 14;
 
 const DEFAULT_DATA = {
-  schemaVersion: 5,
+  schemaVersion: 6,
   settings: {
     profile: {
       name: '',
@@ -88,6 +88,9 @@ const DEFAULT_DATA = {
     // 仅记录收件箱 UID 游标，不保存邮件正文；用于避免重启后重复分析、重复提醒同一封邮件。
     agentMailWatch: null,
     notificationHistory: [],
+    // 只保存不可逆操作的状态、指纹和最小回执，不保存邮件正文、授权码或音乐 Cookie。
+    // 用于在 IPC/网络结果丢失后阻止同一个操作被静默重放。
+    externalOperations: [],
     profileItems: [],
     categories: [],
     music: {

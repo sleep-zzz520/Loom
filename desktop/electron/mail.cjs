@@ -619,6 +619,16 @@ function normaliseMessageId(value) {
   return messageId;
 }
 
+function normaliseSendInput(input = {}) {
+  return {
+    to: addressList(input.to, '收件人', true),
+    cc: addressList(input.cc, '抄送'),
+    subject: normaliseSubject(input.subject),
+    text: normaliseBody(input.text),
+    inReplyTo: normaliseMessageId(input.inReplyTo),
+  };
+}
+
 function smtpReceipt(result = {}) {
   const accepted = Array.isArray(result.accepted)
     ? result.accepted.map((value) => cleanText(String(value))).filter(Boolean)
@@ -641,14 +651,11 @@ function smtpReceipt(result = {}) {
   };
 }
 
-async function sendMessage(input = {}) {
+async function sendMessage(input = {}, options = {}) {
   const config = connectionConfig();
-  const to = addressList(input.to, '收件人', true);
-  const cc = addressList(input.cc, '抄送');
-  const subject = normaliseSubject(input.subject);
-  const text = normaliseBody(input.text);
-  const inReplyTo = normaliseMessageId(input.inReplyTo);
-  const deliveryId = 'loom-' + crypto.randomUUID();
+  const { to, cc, subject, text, inReplyTo } = normaliseSendInput(input);
+  const operationId = cleanText(options.operationId);
+  const deliveryId = /^[0-9a-f-]{36}$/i.test(operationId) ? `loom-${operationId}` : 'loom-' + crypto.randomUUID();
   const transport = createSmtpTransport(config);
   try {
     const result = await transport.sendMail({
@@ -688,6 +695,7 @@ module.exports = {
   sendMessage,
   validateAccountInput,
   addressList,
+  normaliseSendInput,
   smtpReceipt,
   messageSummary,
   isLikelyPromotional,

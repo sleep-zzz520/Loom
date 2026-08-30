@@ -581,7 +581,7 @@ export interface AgentRun {
   error?: string;
 }
 
-export type AgentProposal =
+export type AgentProposal = { operationId?: string } & (
   | { kind: 'create_todo'; title: string; priority: Priority; due: string | null; goalId?: string | null }
   | { kind: 'create_note'; title: string; content: string }
   | { kind: 'save_important_date'; title: string; date: string }
@@ -591,7 +591,8 @@ export type AgentProposal =
   | { kind: 'create_skill_candidate'; name: string; description: string; instructions: string; replacesId: string | null }
   | { kind: 'send_email'; to: string; cc: string; subject: string; text: string; inReplyTo: string | null }
   | { kind: 'add_music_to_playlist'; playlistId: number; playlistName: string; trackId: number; trackTitle: string }
-  | { kind: 'remove_music_from_playlist'; playlistId: number; playlistName: string; trackId: number; trackTitle: string };
+  | { kind: 'remove_music_from_playlist'; playlistId: number; playlistName: string; trackId: number; trackTitle: string }
+);
 
 export interface AgentReply {
   content: string;
@@ -676,8 +677,9 @@ export interface WorkbenchApi {
     }>;
     syncAccount: () => Promise<MusicLibrary>;
     syncPlaylist: (id: number) => Promise<{ tracks: MusicTrack[]; library: MusicLibrary }>;
-    addToPlaylist: (playlistId: number, trackId: number) => Promise<MusicPlaylistMutationResult>;
-    removeFromPlaylist: (playlistId: number, trackId: number) => Promise<MusicPlaylistMutationResult>;
+    preparePlaylistMutation: (operation: 'add' | 'del', playlistId: number, trackId: number) => Promise<{ operationId: string }>;
+    addToPlaylist: (playlistId: number, trackId: number, operationId: string) => Promise<MusicPlaylistMutationResult>;
+    removeFromPlaylist: (playlistId: number, trackId: number, operationId: string) => Promise<MusicPlaylistMutationResult>;
     logout: () => Promise<MusicLibrary>;
   };
   mail: {
@@ -687,7 +689,8 @@ export interface WorkbenchApi {
     list: (folder?: string, limit?: number) => Promise<MailboxResult>;
     getMessage: (folder: string, uid: number) => Promise<MailMessage>;
     markRead: (folder: string, uid: number) => Promise<{ folder: string; uid: number }>;
-    send: (input: { to: string; cc?: string; subject: string; text: string; inReplyTo?: string }) => Promise<MailSendResult>;
+    prepareSend: (input: { to: string; cc?: string; subject: string; text: string; inReplyTo?: string }) => Promise<{ operationId: string }>;
+    send: (input: { to: string; cc?: string; subject: string; text: string; inReplyTo?: string }, operationId: string) => Promise<MailSendResult>;
   };
   agent: {
     status: () => Promise<boolean>;

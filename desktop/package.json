@@ -26,9 +26,10 @@
     "music-theme-self-test": "node --experimental-strip-types electron/music-theme-self-test.cjs",
     "music-self-test": "node electron/music-self-test.cjs",
     "mail-self-test": "cross-env WORKBENCH_MAIL_SELF_TEST=1 node electron/mail.cjs",
+    "operation-self-test": "cross-env WORKBENCH_OPERATION_SELF_TEST=1 node electron/operations.cjs",
     "music-service-self-test": "cross-env WORKBENCH_MUSIC_SERVICE_SELF_TEST=1 node electron/music-service.cjs",
     "proactive-self-test": "cross-env WORKBENCH_PROACTIVE_SELF_TEST=1 node electron/proactive.cjs",
-    "test": "npm run build && npm run self-test && npm run store-self-test && npm run today-self-test && npm run weekly-self-test && npm run quick-capture-self-test && npm run mail-self-test && npm run notifier-self-test && npm run agent-self-test && npm run agent-state-self-test && npm run agent-music-self-test && npm run agent-conversation-title-self-test && npm run profile-avatar-self-test && npm run music-shortcuts-self-test && npm run music-playback-state-self-test && npm run music-lyrics-self-test && npm run music-theme-self-test && npm run music-self-test && npm run music-service-self-test && npm run proactive-self-test"
+    "test": "npm run build && npm run self-test && npm run store-self-test && npm run today-self-test && npm run weekly-self-test && npm run quick-capture-self-test && npm run mail-self-test && npm run operation-self-test && npm run notifier-self-test && npm run agent-self-test && npm run agent-state-self-test && npm run agent-music-self-test && npm run agent-conversation-title-self-test && npm run profile-avatar-self-test && npm run music-shortcuts-self-test && npm run music-playback-state-self-test && npm run music-lyrics-self-test && npm run music-theme-self-test && npm run music-self-test && npm run music-service-self-test && npm run proactive-self-test"
   },
   "dependencies": {
     "dompurify": "^3.4.14",
