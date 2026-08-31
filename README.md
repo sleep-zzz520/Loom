@@ -26,7 +26,11 @@ npm run dev
 npm run typecheck
 npm run build
 npm run start
+npm --prefix desktop run pack:mac
+npm --prefix desktop run dist:mac:unsigned
 ```
+
+`pack:mac` 生成仅供本机验证的 `.app` 目录；`dist:mac:unsigned` 额外生成 `.dmg` 与 `.zip` 安装包到 `desktop/release/`，不可直接向其他用户发布。正式分发必须先准备 Loom 图标、Apple Developer 的 Developer ID 签名和公证凭据，再运行 `npm --prefix desktop run release:mac`。完整发布和升级规则见 [docs/RELEASING.md](docs/RELEASING.md)。
 
 技术栈：Electron + React + TypeScript + Vite。数据默认保存在系统用户数据目录下的 `workbench-data.json`，写入采用原子替换。
 

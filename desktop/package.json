@@ -8,6 +8,10 @@
     "typecheck": "tsc --noEmit",
     "build": "tsc --noEmit && vite build",
     "start": "electron .",
+    "pack:mac": "npm run build && cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --config electron-builder.config.cjs --mac --dir --publish never",
+    "dist:mac:unsigned": "npm run build && cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --config electron-builder.config.cjs --mac --publish never",
+    "release:preflight": "node electron/release-preflight.cjs",
+    "release:mac": "npm run release:preflight && npm run build && cross-env LOOM_RELEASE=1 electron-builder --config electron-builder.config.cjs --mac --publish never",
     "self-test": "cross-env WORKBENCH_SELF_TEST=1 node electron/workspace.cjs",
     "store-self-test": "cross-env WORKBENCH_STORE_SELF_TEST=1 node electron/store.cjs",
     "today-self-test": "cross-env WORKBENCH_TODAY_SELF_TEST=1 node electron/today.cjs",
@@ -48,6 +52,7 @@
     "concurrently": "^9.1.2",
     "cross-env": "^7.0.3",
     "electron": "^37.2.0",
+    "electron-builder": "^26.15.3",
     "typescript": "^5.6.3",
     "vite": "^6.3.5",
     "wait-on": "^8.0.3"
