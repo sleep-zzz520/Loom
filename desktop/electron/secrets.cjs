@@ -1,0 +1,119 @@
+const SECRET_PREFIX = 'safe-storage:v1:';
+const security = require('./security.cjs');
+
+let secureStorage = null;
+
+function init({ safeStorage } = {}) {
+  secureStorage = safeStorage || null;
+}
+
+function isEncrypted(value) {
+  return typeof value === 'string' && value.startsWith(SECRET_PREFIX);
+}
+
+function canEncrypt() {
+  return Boolean(secureStorage && typeof secureStorage.isEncryptionAvailable === 'function' && secureStorage.isEncryptionAvailable());
+}
+
+function encrypt(value, label = '密钥') {
+  const text = String(value || '');
+  if (!text || isEncrypted(text)) return text;
+  if (!canEncrypt()) throw new Error(`系统安全存储不可用，无法安全保存${label}`);
+  return `${SECRET_PREFIX}${secureStorage.encryptString(text).toString('base64')}`;
+}
+
+function decrypt(value, label = '密钥') {
+  const text = String(value || '');
+  if (!text || !isEncrypted(text)) return text;
+  if (!canEncrypt()) throw new Error(`系统安全存储不可用，无法读取${label}`);
+  try {
+    return secureStorage.decryptString(Buffer.from(text.slice(SECRET_PREFIX.length), 'base64'));
+  } catch {
+    throw new Error(`${label}无法解密，请在设置中重新输入`);
+  }
+}
+
+function protectAgentApiKeyPatch(patch, { currentApiBase = '' } = {}) {
+  if (!patch || typeof patch !== 'object' || Array.isArray(patch)) return patch;
+  const apiKey = patch.agent?.apiKey;
+  const hasNewKey = typeof apiKey === 'string' && Boolean(apiKey.trim());
+  const endpointChanged = Boolean(
+    patch.agent
+      && Object.hasOwn(patch.agent, 'apiBase')
+      && security.hasServiceOriginChanged(currentApiBase, patch.agent.apiBase)
+  );
+  if (endpointChanged && !hasNewKey) {
+    return { ...patch, agent: { ...patch.agent, apiKey: '' } };
+  }
+  if (!hasNewKey) return patch;
+  return {
+    ...patch,
+    agent: {
+      ...patch.agent,
+      apiKey: encrypt(apiKey, 'Agent API 密钥'),
+    },
+  };
+}
+
+function withDecryptedAgentApiKey(settings) {
+  if (!settings || typeof settings !== 'object') return settings;
+  const storedKey = settings.agent?.apiKey;
+  return {
+    ...settings,
+    agent: {
+      ...settings.agent,
+      // 旧版明文会在启动时迁移；系统安全存储不可用时不再使用它。
+      apiKey: storedKey && !isEncrypted(storedKey) && !canEncrypt()
+        ? ''
+        : decrypt(storedKey, 'Agent API 密钥'),
+    },
+  };
+}
+
+function migrateAgentApiKey(store) {
+  const current = store.getSettings().agent?.apiKey;
+  if (!current || isEncrypted(current) || !canEncrypt()) return false;
+  store.setSettings({ agent: { apiKey: encrypt(current, 'Agent API 密钥') } });
+  return true;
+}
+
+module.exports = {
+  SECRET_PREFIX,
+  init,
+  isEncrypted,
+  canEncrypt,
+  encrypt,
+  decrypt,
+  protectAgentApiKeyPatch,
+  withDecryptedAgentApiKey,
+  migrateAgentApiKey,
+};
+
+if (process.env.WORKBENCH_SECRETS_SELF_TEST === '1') {
+  const assert = require('node:assert/strict');
+  init({
+    safeStorage: {
+      isEncryptionAvailable: () => true,
+      encryptString: (value) => Buffer.from(`encrypted:${value}`),
+      decryptString: (value) => value.toString('utf8').replace(/^encrypted:/, ''),
+    },
+  });
+  try {
+    const encrypted = encrypt('agent-test-secret', 'Agent API 密钥');
+    assert.match(encrypted, /^safe-storage:v1:/);
+    assert.ok(!encrypted.includes('agent-test-secret'));
+    assert.equal(decrypt(encrypted, 'Agent API 密钥'), 'agent-test-secret');
+    const protectedPatch = protectAgentApiKeyPatch({ agent: { apiBase: 'https://api.example.com', apiKey: 'agent-test-secret' } });
+    assert.match(protectedPatch.agent.apiKey, /^safe-storage:v1:/);
+    assert.equal(withDecryptedAgentApiKey({ agent: protectedPatch.agent }).agent.apiKey, 'agent-test-secret');
+    assert.equal(protectAgentApiKeyPatch({ agent: { apiKey: '' } }).agent.apiKey, '');
+    const clearedOnEndpointChange = protectAgentApiKeyPatch(
+      { agent: { apiBase: 'https://attacker.example/v1' } },
+      { currentApiBase: 'https://api.example.com/v1' },
+    );
+    assert.equal(clearedOnEndpointChange.agent.apiKey, '');
+    console.log('secrets self-test ok');
+  } finally {
+    init();
+  }
+}

@@ -1,5 +1,20 @@
 const isRelease = process.env.LOOM_RELEASE === '1';
 
+function updateFeedUrl(value) {
+  try {
+    const url = new URL(String(value || '').trim());
+    if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash) return '';
+    return `${url.origin}${url.pathname.replace(/\/$/, '')}`;
+  } catch {
+    return '';
+  }
+}
+
+const releaseUpdateUrl = updateFeedUrl(process.env.LOOM_UPDATE_URL);
+if (isRelease && !releaseUpdateUrl) {
+  throw new Error('正式发布需要 LOOM_UPDATE_URL：指向 HTTPS 更新文件目录的公开地址。');
+}
+
 module.exports = {
   appId: 'com.mumu.loom',
   productName: 'Loom',
@@ -14,6 +29,8 @@ module.exports = {
     'electron/**/*',
   ],
   artifactName: '${productName}-${version}-${arch}.${ext}',
+  // 正式包写入固定更新源；运行时不会从用户设置读取更新地址，避免更新来源被篡改。
+  publish: isRelease ? [{ provider: 'generic', url: releaseUpdateUrl }] : undefined,
   mac: {
     target: ['dmg', 'zip'],
     category: 'public.app-category.productivity',

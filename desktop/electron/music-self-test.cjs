@@ -3,14 +3,25 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const music = require('./music.cjs');
+const secrets = require('./secrets.cjs');
 
 void (async () => {
+  secrets.init({
+    safeStorage: {
+      isEncryptionAvailable: () => true,
+      encryptString: (value) => Buffer.from(`encrypted:${value}`),
+      decryptString: (value) => value.toString('utf8').replace(/^encrypted:/, ''),
+    },
+  });
   const settings = { netease: { apiBase: 'http://127.0.0.1:3000/' } };
   assert.equal(music.buildUrl(settings, '/search', { keywords: '海阔天空', type: 1 }).includes('keywords=%E6%B5%B7%E9%98%94%E5%A4%A9%E7%A9%BA'), true);
+  assert.throws(() => music.buildUrl({ netease: { apiBase: 'http://music.example.test' } }, '/search'), /远程服务必须使用 HTTPS/);
   assert.equal(music.normalisePlaylist({ id: 66, name: '自建歌单', subscribed: false }, 99).isMine, true);
   assert.equal(music.normalisePlaylist({ id: 67, name: '收藏歌单', subscribed: true }, 99).isMine, false);
   assert.deepEqual(music.tracksFromSearch({ result: { songs: [{ id: 1, name: '自检歌曲', ar: [{ name: '自检歌手' }], al: { name: '自检专辑', picUrl: 'https://example.com/cover.jpg' }, dt: 180000 }] } }), [{ id: 1, title: '自检歌曲', artists: '自检歌手', album: '自检专辑', coverUrl: 'https://example.com/cover.jpg', durationMs: 180000 }]);
   assert.deepEqual(music.hotTermsFromResponse({ data: [{ searchWord: '热门歌曲' }, { searchWord: '热门歌手' }] }), ['热门歌曲', '热门歌手']);
+  assert.equal(music.playbackUrlFromResponse({ data: [{ url: 'http://example.com/audio.mp3' }] }), 'https://example.com/audio.mp3');
+  assert.equal(music.playbackUrlFromResponse({ data: [{ url: 'javascript:alert(1)' }] }), null);
   assert.deepEqual(music.parseLyrics('[ar:自检歌手]\n[00:01.20]第一句\n[00:02.00][00:03.50]重复的副歌\n[00:03.50]重复的副歌'), [
     { atMs: 1200, text: '第一句' },
     { atMs: 2000, text: '重复的副歌' },
@@ -39,6 +50,9 @@ void (async () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'workbench-music-self-test-'));
   try {
     music.init(tempDir);
+    fs.writeFileSync(path.join(tempDir, 'music-session.json'), JSON.stringify({ cookie: 'MUSIC_U=legacy-cookie' }));
+    assert.equal(music.migrateSession(), true);
+    assert.equal(fs.readFileSync(path.join(tempDir, 'music-session.json'), 'utf8').includes('legacy-cookie'), false);
     let storedLibrary = music.emptyLibrary();
     let qrChecks = 0;
     let playlistTrackFetches = 0;
@@ -82,6 +96,9 @@ void (async () => {
     assert.equal((await music.checkQrLogin(qr.key, settings, storage, { fetcher: accountFetcher })).status, 'waiting-scan');
     const authorized = await music.checkQrLogin(qr.key, settings, storage, { fetcher: accountFetcher });
     assert.equal(authorized.status, 'authorized');
+    const savedSession = fs.readFileSync(path.join(tempDir, 'music-session.json'), 'utf8');
+    assert.match(savedSession, /safe-storage:v1:/);
+    assert.equal(savedSession.includes('test-cookie'), false);
     assert.equal(authorized.library.account.nickname, '自检用户');
     assert.equal(authorized.library.playlists[0].name, '我的收藏');
     assert.equal(await music.playbackUrl(7, settings, { fetcher: accountFetcher }), 'https://example.com/full-audio.mp3');
@@ -103,6 +120,7 @@ void (async () => {
     assert.equal(storedLibrary.account, null);
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
+    secrets.init();
   }
   console.log('music self-test ok');
 })().catch((error) => {

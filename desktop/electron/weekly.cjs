@@ -69,6 +69,51 @@ function orderTodos(left, right) {
     || String(left.title).localeCompare(String(right.title), 'zh-CN');
 }
 
+function nextWeekRange(now) {
+  const current = now instanceof Date ? now : new Date(now);
+  const thisWeekStart = startOfWeek(current);
+  const start = addDays(thisWeekStart, 7);
+  return { start, end: addDays(start, 7) };
+}
+
+/**
+ * 周计划只接收用户已选中的一次性、未安排待办；时间必须落在下周，避免覆盖既有日程。
+ */
+function normalisePlan(entries, now = new Date()) {
+  if (!Array.isArray(entries) || entries.length === 0 || entries.length > 3) {
+    throw new Error('一次计划只能安排 1 到 3 项待办');
+  }
+  const { start: nextWeekStart, end: nextWeekEnd } = nextWeekRange(now);
+  const todosById = new Map(workspace.listTodos().map((todo) => [todo.id, todo]));
+  const seenIds = new Set();
+  return entries.map((entry) => {
+    const id = String(entry?.id || '').trim();
+    const start = String(entry?.start || '').trim();
+    const todo = todosById.get(id);
+    const date = validDate(start);
+    if (!id || !todo) throw new Error('有待办已不存在，请刷新后重试');
+    if (seenIds.has(id)) throw new Error('同一待办只能安排一次');
+    if (!date || !isWithin(date, nextWeekStart, nextWeekEnd)) {
+      throw new Error('计划时间需要落在下周内');
+    }
+    if (todo.done || todo.repeat !== 'none' || todo.start) {
+      throw new Error('该待办已经有安排或不适合加入下周计划');
+    }
+    const due = validDate(todo.due);
+    if (due && due.getTime() < nextWeekStart.getTime()) {
+      throw new Error('临近到期的待办请先在待办中处理');
+    }
+    seenIds.add(id);
+    return { id, start };
+  });
+}
+
+function applyPlan(entries, now = new Date()) {
+  const plan = normalisePlan(entries, now);
+  workspace.scheduleTodos(plan);
+  return { todoIds: plan.map((entry) => entry.id) };
+}
+
 /**
  * 周回顾只从已有本地记录派生：没有完成时间的历史，就不伪造“本周完成数”。
  */
@@ -110,7 +155,7 @@ function buildSnapshot(now = new Date()) {
   };
 }
 
-module.exports = { buildSnapshot };
+module.exports = { buildSnapshot, applyPlan };
 
 if (process.env.WORKBENCH_WEEKLY_SELF_TEST === '1') {
   const assert = require('node:assert/strict');
@@ -124,6 +169,7 @@ if (process.env.WORKBENCH_WEEKLY_SELF_TEST === '1') {
       { id: 'overdue', title: '补充周报', priority: 'high', start: null, end: null, due: '2026-08-23T18:00:00', done: false, repeat: 'none', repeatUntil: null, color: null, personalDateId: null, recurrenceId: null, createdAt: '2026-08-20T09:00:00' },
       { id: 'current', title: '整理会议纪要', priority: 'medium', start: '2026-08-27T10:00:00', end: null, due: '2026-08-27T10:00:00', done: false, repeat: 'none', repeatUntil: null, color: null, personalDateId: null, recurrenceId: null, createdAt: '2026-08-20T09:00:00' },
       { id: 'next', title: '准备下周计划', priority: 'low', start: '2026-08-31T09:00:00', end: null, due: '2026-08-31T09:00:00', done: false, repeat: 'none', repeatUntil: null, color: null, personalDateId: null, recurrenceId: null, createdAt: '2026-08-20T09:00:00' },
+      { id: 'candidate', title: '整理研究资料', priority: 'high', start: null, end: null, due: null, done: false, repeat: 'none', repeatUntil: null, color: null, personalDateId: null, recurrenceId: null, createdAt: '2026-08-20T09:00:00' },
       { id: 'done', title: '已完成事项', priority: 'medium', start: '2026-08-26T09:00:00', end: null, due: '2026-08-26T09:00:00', done: true, repeat: 'none', repeatUntil: null, color: null, personalDateId: null, recurrenceId: null, createdAt: '2026-08-20T09:00:00' },
     ]);
     store.setModule('notes', [{ id: 'note', title: '本周记录', content: '', updatedAt: '2026-08-28T08:00:00' }]);
@@ -134,6 +180,14 @@ if (process.env.WORKBENCH_WEEKLY_SELF_TEST === '1') {
     assert.equal(snapshot.overdue[0].id, 'overdue');
     assert.equal(snapshot.nextWeek[0].id, 'next');
     assert.equal(snapshot.captureCount, 1);
+    assert.throws(() => applyPlan([
+      { id: 'candidate', start: '2026-08-31T09:30' },
+      { id: 'missing', start: '2026-09-01T09:30' },
+    ], new Date('2026-08-29T10:00:00')), /待办已不存在/);
+    assert.equal(workspace.listTodos().find((todo) => todo.id === 'candidate')?.start, null);
+    const plan = applyPlan([{ id: 'candidate', start: '2026-08-31T09:30' }], new Date('2026-08-29T10:00:00'));
+    assert.deepEqual(plan.todoIds, ['candidate']);
+    assert.equal(workspace.listTodos().find((todo) => todo.id === 'candidate')?.start, '2026-08-31T09:30');
     console.log('weekly self-test ok');
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });

@@ -524,7 +524,7 @@ export default function Profile({ initialCategoryFilter = 'all' }: ProfileProps)
                 onPointerCancel={stopPreviewDrag}
               >
                 {previewUrl && activeItem.mimeType.startsWith('image/') ? <div className="library-preview-stage" style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})` }}><img className="library-image-preview" src={previewUrl} alt={activeItem.name} onLoad={(event) => setImageDimensions({ width: event.currentTarget.naturalWidth, height: event.currentTarget.naturalHeight })} /></div> : null}
-                {previewUrl && activeItem.mimeType === 'application/pdf' ? <iframe className="library-pdf-preview" src={previewUrl} title={activeItem.name} /> : null}
+                {previewUrl && activeItem.mimeType === 'application/pdf' ? <iframe className="library-pdf-preview" src={previewUrl} title={activeItem.name} sandbox="" referrerPolicy="no-referrer" /> : null}
                 {!previewUrl && <div className="library-empty"><FileText size={24} /><p>{previewError}</p></div>}
                 {previewUrl && !activeItem.mimeType.startsWith('image/') && activeItem.mimeType !== 'application/pdf' ? <div className="library-empty"><FileText size={24} /><p>该文件已复制到工作台，当前版本暂不支持此格式的内部预览。</p></div> : null}
               </div>

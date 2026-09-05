@@ -4,6 +4,8 @@ const agentOpenListeners = new Set();
 let pendingAgentOpen = null;
 const proactiveAlertListeners = new Set();
 let pendingProactiveAlert = null;
+const updateStatusListeners = new Set();
+let pendingUpdateStatus = null;
 
 ipcRenderer.on('agent:open', (_event, messageId) => {
   const nextMessageId = messageId || undefined;
@@ -23,6 +25,12 @@ ipcRenderer.on('agent:proactive-alert', (_event, alert) => {
   proactiveAlertListeners.forEach((callback) => callback(alert));
 });
 
+ipcRenderer.on('app:update-status', (_event, status) => {
+  if (!status || typeof status !== 'object') return;
+  pendingUpdateStatus = status;
+  updateStatusListeners.forEach((callback) => callback(status));
+});
+
 async function invokeMusic(channel, ...args) {
   try {
     return await ipcRenderer.invoke(channel, ...args);
@@ -34,6 +42,18 @@ async function invokeMusic(channel, ...args) {
 
 contextBridge.exposeInMainWorld('workbench', {
   appInfo: () => ipcRenderer.invoke('app:info'),
+  updates: {
+    status: () => ipcRenderer.invoke('app:update-status'),
+    check: () => ipcRenderer.invoke('app:check-for-updates'),
+    download: () => ipcRenderer.invoke('app:download-update'),
+    install: () => ipcRenderer.invoke('app:install-update'),
+    onStatus: (callback) => {
+      if (typeof callback !== 'function') return () => {};
+      updateStatusListeners.add(callback);
+      if (pendingUpdateStatus) queueMicrotask(() => callback(pendingUpdateStatus));
+      return () => updateStatusListeners.delete(callback);
+    },
+  },
   data: {
     getAll: () => ipcRenderer.invoke('data:get'),
     getSettings: () => ipcRenderer.invoke('data:get-settings'),
@@ -52,6 +72,7 @@ contextBridge.exposeInMainWorld('workbench', {
   },
   weekly: {
     getSnapshot: () => ipcRenderer.invoke('weekly:get-snapshot'),
+    applyPlan: (entries) => ipcRenderer.invoke('weekly:apply-plan', entries),
   },
   library: {
     importFile: (categoryId = '') => ipcRenderer.invoke('library:import-file', categoryId),

@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
 import { parseAgentMessage } from './agentMessageFormat';
 
-const INLINE_TOKEN = /(\*\*[^*\n]+?\*\*|__[^_\n]+?__|`[^`\n]+`|~~[^~\n]+?~~|\[[^\]\n]+\]\((?:https?:\/\/|mailto:)[^\s)]+\)|\*[^*\n]+?\*|_[^_\n]+?_)/g;
+const INLINE_TOKEN = /(\*\*[^*\n]+?\*\*|__[^_\n]+?__|`[^`\n]+`|~~[^~\n]+?~~|\[[^\]\n]+\]\((?:https:\/\/|mailto:)[^\s)]+\)|\*[^*\n]+?\*|_[^_\n]+?_)/g;
 
 function renderInline(text: string): ReactNode[] {
   return text.split(INLINE_TOKEN).filter(Boolean).map((token, index) => {
@@ -17,7 +17,7 @@ function renderInline(text: string): ReactNode[] {
     if (token.startsWith('~~') && token.endsWith('~~')) {
       return <del key={index}>{renderInline(token.slice(2, -2))}</del>;
     }
-    const link = token.match(/^\[([^\]]+)\]\(((?:https?:\/\/|mailto:)[^\s)]+)\)$/);
+    const link = token.match(/^\[([^\]]+)\]\(((?:https:\/\/|mailto:)[^\s)]+)\)$/);
     if (link) {
       return <a key={index} href={link[2]} target="_blank" rel="noreferrer">{renderInline(link[1])}</a>;
     }

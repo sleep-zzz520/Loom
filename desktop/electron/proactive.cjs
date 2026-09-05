@@ -2,6 +2,7 @@ const store = require('./store.cjs');
 const agent = require('./agent.cjs');
 const agentState = require('./agent-state.cjs');
 const operations = require('./operations.cjs');
+const secrets = require('./secrets.cjs');
 const notifier = require('./notifier.cjs');
 const mail = require('./mail.cjs');
 
@@ -35,6 +36,10 @@ let onAlert = () => {};
 function localDateKey(timestamp = new Date()) {
   const date = new Date(timestamp);
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+}
+
+function getAgentSettings() {
+  return secrets.withDecryptedAgentApiKey(store.getSettings());
 }
 
 function listSuggestions() {
@@ -412,7 +417,7 @@ async function runCheck({
   dedupeKey = '',
 } = {}) {
   if (running) return listSuggestions();
-  const settings = store.getSettings();
+  const settings = getAgentSettings();
   if (!agent.getStatus(settings)) return listSuggestions();
   if (settings.agent?.proactiveEnabled === false) return listSuggestions();
   const now = requestedNow instanceof Date ? requestedNow : new Date();
@@ -619,7 +624,7 @@ async function checkInbox({
   triage = agent.triageIncomingMail,
 } = {}) {
   if (mailRunning) return [];
-  const settings = store.getSettings();
+  const settings = getAgentSettings();
   if (settings.agent?.proactiveEnabled === false || settings.agent?.emailMonitorEnabled !== true || !agent.getStatus(settings)) return [];
   const account = mailApi.account();
   if (!account?.configured || !account.user) return [];
@@ -751,6 +756,13 @@ if (process.env.WORKBENCH_PROACTIVE_SELF_TEST === '1') {
     const dir = fs.mkdtempSync(`${os.tmpdir()}/workbench-proactive-self-test-`);
     const originalFetch = global.fetch;
     try {
+    secrets.init({
+      safeStorage: {
+        isEncryptionAvailable: () => true,
+        encryptString: (value) => Buffer.from(`encrypted:${value}`),
+        decryptString: (value) => value.toString('utf8').replace(/^encrypted:/, ''),
+      },
+    });
     store.init(dir);
     store.setSettings({ agent: { persona: { name: '小栖', personality: 'warm', proactiveStyle: 'companion', customInstructions: '' } } });
     const directNow = new Date('2026-08-22T09:00:00');
@@ -789,7 +801,7 @@ if (process.env.WORKBENCH_PROACTIVE_SELF_TEST === '1') {
 
     store.setSettings({
       agent: {
-        apiBase: 'http://agent-self-test.invalid',
+        apiBase: 'https://agent-self-test.invalid',
         apiKey: 'test-key',
         model: 'test-model',
         proactiveEnabled: true,
@@ -900,7 +912,7 @@ if (process.env.WORKBENCH_PROACTIVE_SELF_TEST === '1') {
     onAlert = (alert) => deliveredAlerts.push(alert);
     store.setSettings({
       notify: { maxDailyNotifications: 5 },
-      agent: { apiBase: 'http://agent-self-test.invalid', apiKey: 'test-key', model: 'test-model' },
+      agent: { apiBase: 'https://agent-self-test.invalid', apiKey: 'test-key', model: 'test-model' },
     });
     store.updateModule('todos', () => [{
       id: 'todo-1',
@@ -997,6 +1009,7 @@ if (process.env.WORKBENCH_PROACTIVE_SELF_TEST === '1') {
       console.log('proactive self-test ok');
     } finally {
       global.fetch = originalFetch;
+      secrets.init();
       fs.rmSync(dir, { recursive: true, force: true });
     }
   })().catch((error) => {

@@ -17,12 +17,24 @@ const hasApiKeyCredentials = Boolean(
 );
 const hasKeychainProfile = Boolean(process.env.APPLE_KEYCHAIN_PROFILE && process.env.APPLE_TEAM_ID);
 
+function isHttpsUpdateUrl(value) {
+  try {
+    const url = new URL(String(value || '').trim());
+    return url.protocol === 'https:' && !url.username && !url.password && !url.search && !url.hash;
+  } catch {
+    return false;
+  }
+}
+
 const missing = [];
 if (process.platform !== 'darwin') missing.push('正式 macOS 发布必须在 macOS 构建机上执行');
 if (!fs.existsSync(iconPath)) missing.push('desktop/build/icon.icns（正式 Loom 图标）');
 if (!hasSigningIdentity) missing.push('CSC_LINK 或 CSC_NAME（Developer ID Application 签名证书）');
 if (!hasAppleIdCredentials && !hasApiKeyCredentials && !hasKeychainProfile) {
   missing.push('Apple 公证凭据（Apple ID、App Store Connect API Key 或 Keychain Profile 之一）');
+}
+if (!isHttpsUpdateUrl(process.env.LOOM_UPDATE_URL)) {
+  missing.push('LOOM_UPDATE_URL（HTTPS 更新文件目录，不能含账号、查询参数或片段）');
 }
 
 if (missing.length) {

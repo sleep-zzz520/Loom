@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type ChangeEvent, type FormEvent } from 'react';
 import type { SettingsKey } from '../App';
-import type { AppSettings, BackupRecord, NotificationHistoryItem } from '../types';
+import type { AppSettings, AppUpdateStatus, BackupRecord, NotificationHistoryItem } from '../types';
 import { TimeField } from '../components/DateFields';
 import { AVATAR_ACCEPT, avatarUploadError } from './profileAvatar';
 
@@ -41,6 +41,8 @@ export default function Settings({ section }: SettingsProps) {
   const [backups, setBackups] = useState<BackupRecord[]>([]);
   const [backupBusy, setBackupBusy] = useState(false);
   const [backupMessage, setBackupMessage] = useState('');
+  const [updateStatus, setUpdateStatus] = useState<AppUpdateStatus | null>(null);
+  const [updateBusy, setUpdateBusy] = useState(false);
 
   useEffect(() => {
     Promise.all([
@@ -63,6 +65,24 @@ export default function Settings({ section }: SettingsProps) {
   useEffect(() => {
     if (section === 'settings-config') void loadBackups();
   }, [section, loadBackups]);
+
+  useEffect(() => {
+    let disposed = false;
+    void window.workbench.updates.status()
+      .then((status) => {
+        if (!disposed) setUpdateStatus(status);
+      })
+      .catch(() => {
+        if (!disposed) setUpdateStatus(null);
+      });
+    const stop = window.workbench.updates.onStatus((status) => {
+      if (!disposed) setUpdateStatus(status);
+    });
+    return () => {
+      disposed = true;
+      stop();
+    };
+  }, []);
 
   const persistSettings = useCallback(async (nextSettings: AppSettings) => {
     const revision = saveRevisionRef.current;
@@ -226,6 +246,33 @@ export default function Settings({ section }: SettingsProps) {
       setBackupMessage('恢复失败，当前数据没有被替换。');
     } finally {
       setBackupBusy(false);
+    }
+  }
+
+  async function runUpdateAction(action: 'check' | 'download' | 'install') {
+    setUpdateBusy(true);
+    try {
+      const next = action === 'check'
+        ? await window.workbench.updates.check()
+        : action === 'download'
+          ? await window.workbench.updates.download()
+          : await window.workbench.updates.install();
+      setUpdateStatus(next);
+    } catch (error) {
+      setUpdateStatus((current) => ({
+        state: 'error',
+        currentVersion: current?.currentVersion || '—',
+        availableVersion: current?.availableVersion || null,
+        releaseNotes: current?.releaseNotes || '',
+        releaseDate: current?.releaseDate || null,
+        downloadPercent: null,
+        message: `更新失败：${error instanceof Error ? error.message : '未知错误'}`,
+        canCheck: true,
+        canDownload: false,
+        canInstall: false,
+      }));
+    } finally {
+      setUpdateBusy(false);
     }
   }
 
@@ -520,6 +567,28 @@ export default function Settings({ section }: SettingsProps) {
           </>}
 
           {section === 'settings-config' && <>
+          <section className="settings-subsection settings-subsection--updates" aria-labelledby="app-update-title">
+            <div className="settings-subsection-head">
+              <div>
+                <h3 id="app-update-title">应用更新</h3>
+                <p>新版本由你确认下载；下载完成后，再由你决定何时重启安装。</p>
+              </div>
+            </div>
+            <div className={`settings-update-card is-${updateStatus?.state || 'loading'}`} aria-live="polite">
+              <div className="settings-update-copy">
+                <span className="settings-update-kicker">当前版本 {updateStatus?.currentVersion || '读取中…'}</span>
+                <strong>{updateStatus?.state === 'available' ? `Loom ${updateStatus.availableVersion || '新版本'} 已可下载` : updateStatus?.state === 'downloaded' ? '新版本已准备好' : updateStatus?.state === 'downloading' ? '正在下载新版本' : updateStatus?.state === 'checking' ? '正在检查新版本' : updateStatus?.state === 'up-to-date' ? '已经是最新版本' : updateStatus?.state === 'unavailable' ? '应用内更新尚未启用' : updateStatus?.state === 'error' ? '暂时无法检查更新' : '可以检查新版本'}</strong>
+                <p>{updateStatus?.message || '正在读取更新状态…'}</p>
+                {updateStatus?.releaseNotes && <small className="settings-update-notes">本次更新：{updateStatus.releaseNotes}</small>}
+                {updateStatus?.state === 'downloading' && <span className="settings-update-progress" aria-label={`下载进度 ${updateStatus.downloadPercent ?? 0}%`}><i style={{ width: `${updateStatus.downloadPercent ?? 0}%` }} /></span>}
+              </div>
+              <div className="settings-update-actions">
+                {updateStatus?.canInstall ? <button type="button" className="settings-update-primary" onClick={() => void runUpdateAction('install')} disabled={updateBusy}>重启并更新</button>
+                  : updateStatus?.canDownload ? <button type="button" className="settings-update-primary" onClick={() => void runUpdateAction('download')} disabled={updateBusy}>下载更新</button>
+                    : <button type="button" className="settings-update-secondary" onClick={() => void runUpdateAction('check')} disabled={updateBusy || updateStatus?.canCheck === false}>检查更新</button>}
+              </div>
+            </div>
+          </section>
           <section className="settings-subsection settings-subsection--persona" aria-labelledby="agent-persona-title">
             <div className="settings-subsection-head">
               <div>
@@ -640,6 +709,7 @@ export default function Settings({ section }: SettingsProps) {
                 }
                 placeholder="https://api.deepseek.com/v1"
               />
+              <small className="field-hint">远程服务必须使用 HTTPS；改到新服务来源后，已保存的密钥会被清除，需要重新输入。</small>
             </label>
             <label className="field">
               <span>API 密钥</span>
@@ -651,6 +721,7 @@ export default function Settings({ section }: SettingsProps) {
                 }
                 placeholder="sk-..."
               />
+              <small className="field-hint">已保存的密钥不会回显；留空会保留原密钥，输入新值即可替换。</small>
             </label>
             <label className="field">
               <span>模型</span>
@@ -679,7 +750,7 @@ export default function Settings({ section }: SettingsProps) {
                   onChange={(event) => update({ netease: { apiBase: event.target.value } })}
                   placeholder="http://127.0.0.1:3000"
                 />
-              <small className="field-hint">保留默认地址时由工作台自动管理，不需要手动启动网页或终端服务。</small>
+              <small className="field-hint">保留默认地址时由工作台自动管理，不需要手动启动网页或终端服务；远程服务必须使用 HTTPS，改到新来源会退出当前音乐账号。</small>
               </label>
             </div>
           </details>

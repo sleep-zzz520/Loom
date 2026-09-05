@@ -3,6 +3,7 @@ const store = require('./store.cjs');
 const music = require('./music.cjs');
 const mail = require('./mail.cjs');
 const agentState = require('./agent-state.cjs');
+const security = require('./security.cjs');
 
 const TOOL_DEFINITIONS = [
   {
@@ -646,7 +647,7 @@ function normaliseToolCalls(calls) {
 }
 
 async function streamModel(settings, messages, onDelta, tools = TOOL_DEFINITIONS) {
-  const base = String(settings.agent.apiBase || '').replace(/\/+$/, '');
+  const base = security.requireServiceEndpoint(settings.agent.apiBase, 'Agent API 地址');
   const payload = {
     model: settings.agent.model,
     messages,

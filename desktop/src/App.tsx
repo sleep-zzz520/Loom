@@ -6,6 +6,7 @@ import {
   CalendarDays,
   ChevronDown,
   CheckSquare,
+  Download,
   FileLock2,
   Inbox,
   Music2,
@@ -31,7 +32,7 @@ import Today from './modules/Today';
 import WeeklyReview from './modules/WeeklyReview';
 import QuickCapture from './components/QuickCapture';
 import { isQuickCaptureShortcut } from './components/captureParser';
-import type { AgentMusicCommand, AgentProactiveAlert, Category, ProfileItem } from './types';
+import type { AgentMusicCommand, AgentProactiveAlert, AppUpdateStatus, Category, ProfileItem } from './types';
 
 export type ModuleKey =
   | 'today'
@@ -122,12 +123,55 @@ function ProactiveAlertToast({
   );
 }
 
+function AppUpdateToast({
+  status,
+  busy,
+  onDownload,
+  onInstall,
+  onOpenSettings,
+  onDismiss,
+}: {
+  status: AppUpdateStatus;
+  busy: boolean;
+  onDownload: () => void;
+  onInstall: () => void;
+  onOpenSettings: () => void;
+  onDismiss: () => void;
+}) {
+  const downloading = status.state === 'downloading';
+  const readyToInstall = status.state === 'downloaded';
+  return (
+    <aside className="app-update-toast" role="status" aria-live="polite" aria-labelledby="app-update-toast-title">
+      <div className="app-update-toast-topline">
+        <span>{readyToInstall ? '更新已就绪' : downloading ? '正在更新' : '发现新版本'}</span>
+        <button type="button" onClick={onDismiss} aria-label="暂时关闭更新提示" title="暂时关闭"><X size={15} /></button>
+      </div>
+      <div className="app-update-toast-copy">
+        <h2 id="app-update-toast-title">{readyToInstall ? '新版本已下载完成' : downloading ? '正在下载 Loom 更新' : `Loom ${status.availableVersion || '新版本'} 可以更新`}</h2>
+        <p>{readyToInstall ? '重启后会自动完成安装；本地数据不会被覆盖。' : downloading ? `已下载 ${status.downloadPercent ?? 0}%` : '下载由你确认发起，安装也会等你选择重启。'}</p>
+        {downloading && <span className="app-update-toast-progress" aria-label={`下载进度 ${status.downloadPercent ?? 0}%`}><i style={{ width: `${status.downloadPercent ?? 0}%` }} /></span>}
+        <div className="app-update-toast-actions">
+          {readyToInstall
+            ? <button type="button" className="app-update-toast-primary" onClick={onInstall} disabled={busy}>重启并更新</button>
+            : downloading
+              ? <button type="button" className="app-update-toast-secondary" onClick={onOpenSettings}>查看进度</button>
+              : <button type="button" className="app-update-toast-primary" onClick={onDownload} disabled={busy}><Download size={14} />下载更新</button>}
+          {!downloading && !readyToInstall && <button type="button" className="app-update-toast-secondary" onClick={onOpenSettings}>查看详情</button>}
+        </div>
+      </div>
+    </aside>
+  );
+}
+
 export default function App() {
   const [active, setActive] = useState<ModuleKey | SettingsKey>('today');
   const [clockNow, setClockNow] = useState(() => new Date());
   const [musicCommand, setMusicCommand] = useState<AgentMusicCommand | null>(null);
   const [agentOpenMessageId, setAgentOpenMessageId] = useState('');
   const [proactiveAlert, setProactiveAlert] = useState<AgentProactiveAlert | null>(null);
+  const [appUpdate, setAppUpdate] = useState<AppUpdateStatus | null>(null);
+  const [updateActionBusy, setUpdateActionBusy] = useState(false);
+  const [updateToastDismissed, setUpdateToastDismissed] = useState(false);
   const [unreadProactiveCount, setUnreadProactiveCount] = useState(0);
   const [profileOpen, setProfileOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -170,6 +214,26 @@ export default function App() {
       .then((info) => setAppName(info.name))
       .catch(() => {});
   }, []);
+
+  useEffect(() => {
+    let disposed = false;
+    void window.workbench.updates.status()
+      .then((status) => {
+        if (!disposed) setAppUpdate(status);
+      })
+      .catch(() => {});
+    const stop = window.workbench.updates.onStatus((status) => {
+      if (!disposed) setAppUpdate(status);
+    });
+    return () => {
+      disposed = true;
+      stop();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (appUpdate?.state === 'available' || appUpdate?.state === 'downloaded') setUpdateToastDismissed(false);
+  }, [appUpdate?.availableVersion, appUpdate?.state]);
 
   useEffect(() => {
     let disposed = false;
@@ -270,6 +334,24 @@ export default function App() {
     setAgentOpenMessageId(proactiveAlert.messageId);
     setActive('agent');
     setProactiveAlert(null);
+  }
+
+  function openUpdateSettings() {
+    setProfileOpen(false);
+    setSettingsOpen(true);
+    setActive('settings-config');
+  }
+
+  async function runAppUpdateAction(action: 'download' | 'install') {
+    setUpdateActionBusy(true);
+    try {
+      const next = action === 'download'
+        ? await window.workbench.updates.download()
+        : await window.workbench.updates.install();
+      setAppUpdate(next);
+    } finally {
+      setUpdateActionBusy(false);
+    }
   }
 
   async function saveLibraryCategory() {
@@ -555,6 +637,16 @@ export default function App() {
           alert={proactiveAlert}
           onOpen={openProactiveAlert}
           onDismiss={() => setProactiveAlert(null)}
+        />
+      )}
+      {appUpdate && !updateToastDismissed && ['available', 'downloading', 'downloaded'].includes(appUpdate.state) && (
+        <AppUpdateToast
+          status={appUpdate}
+          busy={updateActionBusy}
+          onDownload={() => void runAppUpdateAction('download')}
+          onInstall={() => void runAppUpdateAction('install')}
+          onOpenSettings={openUpdateSettings}
+          onDismiss={() => setUpdateToastDismissed(true)}
         />
       )}
       {categoryDeleteTarget && (() => {

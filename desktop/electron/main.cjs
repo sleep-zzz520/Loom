@@ -1,4 +1,4 @@
-const { app, BrowserWindow, dialog, ipcMain, net, safeStorage } = require('electron');
+const { app, BrowserWindow, dialog, ipcMain: electronIpcMain, net, protocol, safeStorage, shell } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
 const store = require('./store.cjs');
@@ -15,12 +15,30 @@ const music = require('./music.cjs');
 const musicService = require('./music-service.cjs');
 const mail = require('./mail.cjs');
 const operations = require('./operations.cjs');
+const security = require('./security.cjs');
+const secrets = require('./secrets.cjs');
+const updates = require('./updates.cjs');
 
 const isDev = Boolean(process.env.VITE_DEV_SERVER_URL);
 let mainWindow = null;
 let musicServiceStatus = musicService.getStatus();
+let updateService = null;
+let initialUpdateCheckScheduled = false;
 // ponytail: 队列仅保留在当前应用进程；需要跨重启续播时再持久化最近一次 Agent 音乐会话。
 const agentMusicState = agent.createMusicState();
+
+// 必须在 app ready 前注册；发布版不再使用 file://，避免渲染器通过文件协议扩大读取范围。
+security.registerAppScheme(protocol);
+
+function registerTrustedIpc(channel, handler) {
+  electronIpcMain.handle(channel, (event, ...args) => {
+    security.assertTrustedIpcSender(event, mainWindow?.webContents, process.env.VITE_DEV_SERVER_URL);
+    return handler(event, ...args);
+  });
+}
+
+// 所有 IPC 都经同一来源校验，避免以后新增处理器时遗漏事件发送方检查。
+const ipcMain = Object.freeze({ handle: registerTrustedIpc });
 
 function getMusicSettings() {
   const settings = store.getSettings();
@@ -45,6 +63,10 @@ function getMusicServiceStatus() {
   };
 }
 
+function getAgentSettings() {
+  return secrets.withDecryptedAgentApiKey(store.getSettings());
+}
+
 function createWindow() {
   const win = new BrowserWindow({
     width: 1280,
@@ -57,9 +79,18 @@ function createWindow() {
       preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,
       nodeIntegration: false,
+      sandbox: true,
+      webSecurity: true,
+      allowRunningInsecureContent: false,
+      webviewTag: false,
     },
   });
   mainWindow = win;
+  security.lockDownSession(win.webContents.session);
+  security.installRendererGuards(win.webContents, {
+    devServerUrl: process.env.VITE_DEV_SERVER_URL,
+    openExternal: shell.openExternal,
+  });
   win.on('closed', () => {
     if (mainWindow === win) mainWindow = null;
   });
@@ -71,7 +102,7 @@ function createWindow() {
   if (isDev) {
     win.loadURL(process.env.VITE_DEV_SERVER_URL);
   } else {
-    win.loadFile(path.join(__dirname, '..', 'dist', 'index.html'));
+    win.loadURL(security.APP_ENTRY_URL);
   }
   return win;
 }
@@ -107,13 +138,7 @@ function notifyAgentAboutTodoReminders(notifications) {
 }
 
 function publicSettings(settings) {
-  return {
-    ...settings,
-    email: {
-      ...settings.email,
-      pass: '',
-    },
-  };
+  return store.safeSettingsCopy(settings);
 }
 
 function publicData() {
@@ -124,10 +149,18 @@ function publicData() {
   };
 }
 
-function withoutEmailPassword(patch) {
-  if (!patch || typeof patch !== 'object' || !patch.email || typeof patch.email !== 'object') return patch;
-  const { pass: _password, ...email } = patch.email;
-  return { ...patch, email };
+function prepareRendererSettingsPatch(patch) {
+  const current = store.getSettings();
+  const next = store.sanitizeRendererSettingsPatch(patch);
+  const musicOriginChanged = Boolean(
+    next?.netease
+      && Object.hasOwn(next.netease, 'apiBase')
+      && security.hasServiceOriginChanged(current.netease?.apiBase, next.netease.apiBase)
+  );
+  return {
+    patch: secrets.protectAgentApiKeyPatch(next, { currentApiBase: current.agent?.apiBase }),
+    clearMusicSession: musicOriginChanged,
+  };
 }
 
 function musicOperationPayload(operation, playlistId, trackId) {
@@ -182,10 +215,16 @@ function registerIpc() {
     version: app.getVersion(),
     platform: process.platform,
   }));
+  ipcMain.handle('app:update-status', () => updateService?.status());
+  ipcMain.handle('app:check-for-updates', () => updateService?.check());
+  ipcMain.handle('app:download-update', () => updateService?.download());
+  ipcMain.handle('app:install-update', () => updateService?.install());
   ipcMain.handle('data:get', () => publicData());
   ipcMain.handle('data:get-settings', () => publicSettings(store.getSettings()));
   ipcMain.handle('data:set-settings', (_event, patch) => {
-    const settings = store.setSettings(withoutEmailPassword(patch));
+    const prepared = prepareRendererSettingsPatch(patch);
+    const settings = store.setSettings(prepared.patch);
+    if (prepared.clearMusicSession) music.clearSession();
     if (patch?.agent && Object.hasOwn(patch.agent, 'emailMonitorEnabled')) void proactive.checkInbox();
     return publicSettings(settings);
   });
@@ -252,6 +291,12 @@ function registerIpc() {
   ipcMain.handle('workspace:snapshot', () => workspace.snapshot());
   ipcMain.handle('today:get-snapshot', () => today.buildSnapshot());
   ipcMain.handle('weekly:get-snapshot', () => weekly.buildSnapshot());
+  ipcMain.handle('weekly:apply-plan', (_event, entries) => {
+    const result = weekly.applyPlan(entries);
+    // 用户已经明确确认计划；这里只更新本地状态，不触发额外的 Agent 分析或通知。
+    notifyAgentStateChanged();
+    return result;
+  });
   ipcMain.handle('workspace:list-todos', () => workspace.listTodos());
   ipcMain.handle('workspace:create-todo', (_event, input) => {
     const todos = workspace.createTodo(input);
@@ -328,9 +373,9 @@ function registerIpc() {
     return { operationId: operations.prepare('mail:send', payload).id };
   });
   ipcMain.handle('mail:send', (_event, input, operationId) => executeMailOperation(operationId, input));
-  ipcMain.handle('agent:status', () => agent.getStatus(store.getSettings()));
+  ipcMain.handle('agent:status', () => agent.getStatus(getAgentSettings()));
   ipcMain.handle('agent:chat', async (event, messages) => {
-    const reply = await agent.runAgent(messages, store.getSettings(), (delta) => {
+    const reply = await agent.runAgent(messages, getAgentSettings(), (delta) => {
       event.sender.send('agent:stream', delta);
     }, {
       onMusicCommand: (command) => event.sender.send('agent:music-command', command),
@@ -434,15 +479,30 @@ function registerIpc() {
 }
 
 app.whenReady().then(() => {
+  security.registerAppProtocol(protocol, net, path.join(__dirname, '..', 'dist'));
   store.init(app.getPath('userData'));
+  secrets.init({ safeStorage });
+  secrets.migrateAgentApiKey(store);
   workspace.repairPersonalDateTodos();
   mail.init({ safeStorage });
   music.init(app.getPath('userData'));
+  music.migrateSession();
   library.init(app.getPath('userData'));
+  updateService = updates.createUpdateService({
+    app,
+    emitStatus: (status) => mainWindow?.webContents.send('app:update-status', status),
+  });
+  updateService.initialize();
   void (async () => {
     musicServiceStatus = await musicService.start(store.getSettings());
     registerIpc();
     createWindow();
+
+    // 仅在本次启动检查一次；下载与安装都必须由用户在应用内明确触发。
+    if (!initialUpdateCheckScheduled) {
+      initialUpdateCheckScheduled = true;
+      setTimeout(() => { void updateService?.check(); }, 2500);
+    }
 
     proactive.start({
       onUpdated: () => mainWindow?.webContents.send('agent:proactive-updated'),

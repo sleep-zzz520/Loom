@@ -89,6 +89,41 @@ function updateTodo(id, patch = {}) {
   return todos;
 }
 
+/**
+ * 批量写入已确认的开始时间。先完整校验再一次更新，避免周计划只排进去一半。
+ */
+function scheduleTodos(entries) {
+  if (!Array.isArray(entries) || entries.length === 0) {
+    throw new Error('请至少安排一项待办');
+  }
+  const seenIds = new Set();
+  const updates = new Map();
+  for (const entry of entries) {
+    const id = String(entry?.id || '').trim();
+    const start = String(entry?.start || '').trim();
+    if (!id || !start || Number.isNaN(new Date(start).getTime())) {
+      throw new Error('计划时间无效，请重新选择');
+    }
+    if (seenIds.has(id)) {
+      throw new Error('同一待办只能安排一次');
+    }
+    seenIds.add(id);
+    updates.set(id, { start });
+  }
+  const current = listTodos();
+  for (const id of updates.keys()) {
+    if (!current.some((todo) => todo.id === id)) {
+      throw new Error('有待办已不存在，请刷新后重试');
+    }
+  }
+  const todos = store.updateModule('todos', (items) => items.map((todo) => {
+    const update = updates.get(todo.id);
+    return update ? { ...todo, ...update } : todo;
+  }));
+  todos.filter((todo) => updates.has(todo.id) && todo.agentGoalId).forEach((todo) => agentState.syncTodo(todo));
+  return todos;
+}
+
 function dateKey(value) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return '';
@@ -309,6 +344,7 @@ const workspace = {
   listTodos,
   createTodo,
   updateTodo,
+  scheduleTodos,
   removeTodo,
   savePersonalDate,
   repairPersonalDateTodos,
@@ -321,6 +357,7 @@ const workspace = {
 module.exports = workspace;
 
 if (process.env.WORKBENCH_SELF_TEST === '1') {
+  const assert = require('node:assert/strict');
   const os = require('node:os');
   const fs = require('node:fs');
   const dir = fs.mkdtempSync(`${os.tmpdir()}/workbench-self-test-`);
@@ -334,13 +371,19 @@ if (process.env.WORKBENCH_SELF_TEST === '1') {
     if (!updated[0].done) {
       throw new Error('todo update failed');
     }
+    const planned = workspace.createTodo({ title: '自检周计划', priority: 'medium' })[0];
+    const scheduled = workspace.scheduleTodos([{ id: planned.id, start: '2026-05-21T09:30' }]);
+    if (scheduled.find((todo) => todo.id === planned.id)?.start !== '2026-05-21T09:30') {
+      throw new Error('todo schedule failed');
+    }
+    assert.throws(() => workspace.scheduleTodos([{ id: planned.id, start: 'invalid' }]), /计划时间无效/);
     const yearly = workspace.createTodo({ title: '自检生日', due: '2026-05-20T09:00:00', repeat: 'yearly' })[0];
     const remembered = workspace.rememberPersonalDate(yearly.id);
     if (remembered.personalDate.date !== '05-20' || !remembered.todos.find((todo) => todo.id === yearly.id)?.personalDateId) {
       throw new Error('personal date remember failed');
     }
     const repeated = workspace.updateTodo(yearly.id, { done: true });
-    if (repeated.some(Array.isArray) || repeated.length !== 2 || repeated.find((todo) => todo.id === yearly.id)?.done || new Date(repeated.find((todo) => todo.id === yearly.id).due).getFullYear() !== 2027) {
+    if (repeated.some(Array.isArray) || repeated.length !== 3 || repeated.find((todo) => todo.id === yearly.id)?.done || new Date(repeated.find((todo) => todo.id === yearly.id).due).getFullYear() !== 2027) {
       throw new Error('yearly todo repeat failed');
     }
     const daily = workspace.createTodo({ title: '每日学习', due: '2026-05-20T09:00:00', repeat: 'daily', repeatUntil: '2026-05-22' })[0];
@@ -380,7 +423,7 @@ if (process.env.WORKBENCH_SELF_TEST === '1') {
       throw new Error('profile item save failed');
     }
     const snap = workspace.snapshot();
-    if (snap.todos.length !== 3 || snap.notes.length !== 0 || snap.categories.length !== 1 || snap.settings.notify.importantDates.length !== 1) {
+    if (snap.todos.length !== 4 || snap.notes.length !== 0 || snap.categories.length !== 1 || snap.settings.notify.importantDates.length !== 1) {
       throw new Error('snapshot failed');
     }
     const legacyBirthday = {

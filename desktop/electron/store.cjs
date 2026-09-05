@@ -140,6 +140,25 @@ function safeDataCopy(data) {
   return safe;
 }
 
+function safeSettingsCopy(settings) {
+  const safe = clone(settings);
+  if (safe.email) safe.email.pass = '';
+  if (safe.agent) safe.agent.apiKey = '';
+  if (safe.sync) safe.sync.token = '';
+  return safe;
+}
+
+function sanitizeRendererSettingsPatch(patch) {
+  if (!patch || typeof patch !== 'object' || Array.isArray(patch)) return patch;
+  const safe = clone(patch);
+  if (safe.email && typeof safe.email === 'object') delete safe.email.pass;
+  if (safe.agent && typeof safe.agent === 'object' && !(typeof safe.agent.apiKey === 'string' && safe.agent.apiKey.trim())) {
+    delete safe.agent.apiKey;
+  }
+  if (safe.sync && typeof safe.sync === 'object') delete safe.sync.token;
+  return safe;
+}
+
 function backupFiles() {
   if (!backupDir || !fs.existsSync(backupDir)) return [];
   return fs.readdirSync(backupDir)
@@ -362,6 +381,8 @@ module.exports = {
   createBackup,
   restoreBackup,
   exportSafeData,
+  safeSettingsCopy,
+  sanitizeRendererSettingsPatch,
 };
 
 if (process.env.WORKBENCH_STORE_SELF_TEST === '1') {
@@ -391,6 +412,17 @@ if (process.env.WORKBENCH_STORE_SELF_TEST === '1') {
     assert.equal(setSettings({ profile: { avatarDataUrl: 'data:image/png;base64,AA==' } }).profile.avatarDataUrl, '');
     assert.equal(getModule('agentMemories').find((memory) => memory.content === '旧版工作偏好')?.status, 'active');
     setSettings({ agent: { apiKey: 'store-self-test-secret' } });
+    const publicSettings = safeSettingsCopy(getSettings());
+    assert.equal(publicSettings.agent.apiKey, '');
+    const sanitizedEmptySecret = sanitizeRendererSettingsPatch({
+      email: { pass: 'email-secret' },
+      agent: { apiBase: 'https://api.example.com', apiKey: '' },
+      sync: { token: 'sync-secret' },
+    });
+    assert.equal(Object.hasOwn(sanitizedEmptySecret.email, 'pass'), false);
+    assert.equal(Object.hasOwn(sanitizedEmptySecret.agent, 'apiKey'), false);
+    assert.equal(Object.hasOwn(sanitizedEmptySecret.sync, 'token'), false);
+    assert.equal(sanitizeRendererSettingsPatch({ agent: { apiKey: 'replacement-secret' } }).agent.apiKey, 'replacement-secret');
     const backup = createBackup();
     assert.ok(backup?.id);
     const backupText = fs.readFileSync(path.join(dir, 'backups', backup.id), 'utf8');

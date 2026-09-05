@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { CalendarDays, ChevronRight, CircleAlert, FileText, ListTodo, RefreshCw, Target } from 'lucide-react';
 import type { ModuleKey } from '../App';
 import type { WeeklyItem, WeeklySnapshot } from '../types';
+import WeeklyPlanDraft from '../components/WeeklyPlanDraft';
 
 type WeeklyReviewProps = { onNavigate: (target: ModuleKey) => void };
 
@@ -28,6 +29,7 @@ export default function WeeklyReview({ onNavigate }: WeeklyReviewProps) {
   const [snapshot, setSnapshot] = useState<WeeklySnapshot | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [planOpen, setPlanOpen] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -84,10 +86,11 @@ export default function WeeklyReview({ onNavigate }: WeeklyReviewProps) {
       </div>
 
       <section className="weekly-section weekly-next" aria-labelledby="weekly-next-title">
-        <div className="weekly-section-head"><div><ListTodo size={15} aria-hidden="true" /><h2 id="weekly-next-title">下周准备</h2></div><span>{rangeLabel(data.nextWeekStart, data.nextWeekEnd)}</span></div>
+        <div className="weekly-section-head"><div><ListTodo size={15} aria-hidden="true" /><h2 id="weekly-next-title">下周准备</h2></div><button type="button" onClick={() => setPlanOpen(true)}>安排下周 <ChevronRight size={14} /></button></div>
         <ItemList items={data.nextWeek} empty="下周还没有排入具体时间的事项。需要时可用 ⌘ K 快速添加。" onNavigate={onNavigate} />
       </section>
       <p className="weekly-footnote"><Target size={14} aria-hidden="true" /> 回顾的是当前留在工作台里的事实；已完成但未保留完成时间的事项不会被计入本周完成数。</p>
+      <WeeklyPlanDraft open={planOpen} weekStart={data.nextWeekStart} weekEnd={data.nextWeekEnd} onClose={() => setPlanOpen(false)} onApplied={() => void load()} />
     </section>
   );
 }

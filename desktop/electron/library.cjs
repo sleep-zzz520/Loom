@@ -4,6 +4,7 @@ const store = require('./store.cjs');
 
 let libraryDir = '';
 const PREVIEW_LIMIT_BYTES = 25 * 1024 * 1024;
+const SAFE_PREVIEW_MIME_TYPES = new Set(['application/pdf', 'image/png', 'image/jpeg', 'image/gif', 'image/webp']);
 
 const MIME_TYPES = {
   '.pdf': 'application/pdf',
@@ -144,9 +145,14 @@ function previewFile(id) {
   if (stat.size > PREVIEW_LIMIT_BYTES) {
     return { available: false, reason: '文件超过 25MB，暂不支持在工作台内预览。' };
   }
+  // MIME 必须由受控副本的文件名重新推导，不能相信渲染器可写的资料元数据。
+  const previewMimeType = mimeType(filePath);
+  if (!SAFE_PREVIEW_MIME_TYPES.has(previewMimeType)) {
+    return { available: false, reason: '为保护工作台安全，当前仅支持预览 PDF、PNG、JPG、GIF 和 WebP 文件。' };
+  }
   return {
     available: true,
-    mimeType: item.mimeType || mimeType(filePath),
+    mimeType: previewMimeType,
     data: fs.readFileSync(filePath).toString('base64'),
   };
 }
@@ -166,6 +172,10 @@ if (process.env.WORKBENCH_LIBRARY_SELF_TEST === '1') {
       throw new Error('file import failed');
     }
     if (!previewFile(imported.id).available) throw new Error('file preview failed');
+    const svg = path.join(dir, 'untrusted.svg');
+    fs.writeFileSync(svg, '<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>');
+    const importedSvg = importFile(svg).item;
+    if (previewFile(importedSvg.id).available) throw new Error('unsafe svg preview must be blocked');
     const duplicateImport = importFile(source).item;
     if (duplicateImport.name !== 'sample (1).pdf') {
       throw new Error('duplicate import name failed');

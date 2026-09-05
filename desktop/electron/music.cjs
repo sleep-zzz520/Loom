@@ -1,5 +1,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
+const secrets = require('./secrets.cjs');
+const security = require('./security.cjs');
 
 function safeText(value, limit = 300) {
   return String(value || '').trim().slice(0, limit);
@@ -27,7 +29,10 @@ function readSession() {
   if (!sessionFile || !fs.existsSync(sessionFile)) return '';
   try {
     const saved = JSON.parse(fs.readFileSync(sessionFile, 'utf8'));
-    return normaliseCookie(saved?.cookie);
+    const cookie = saved?.cookie;
+    // 旧版本的明文会在启动时迁移；安全存储不可用时不再继续使用它。
+    if (cookie && !secrets.isEncrypted(cookie) && !secrets.canEncrypt()) return '';
+    return normaliseCookie(secrets.decrypt(cookie, '音乐账号登录凭据'));
   } catch {
     return '';
   }
@@ -39,7 +44,7 @@ function saveSession(cookie) {
   if (!sessionFile) throw new Error('音乐账号存储尚未初始化');
   fs.mkdirSync(path.dirname(sessionFile), { recursive: true });
   const tempFile = `${sessionFile}.tmp`;
-  fs.writeFileSync(tempFile, JSON.stringify({ cookie: value }, null, 2), { encoding: 'utf8', mode: 0o600 });
+  fs.writeFileSync(tempFile, JSON.stringify({ cookie: secrets.encrypt(value, '音乐账号登录凭据') }, null, 2), { encoding: 'utf8', mode: 0o600 });
   fs.renameSync(tempFile, sessionFile);
   try {
     fs.chmodSync(sessionFile, 0o600);
@@ -53,18 +58,21 @@ function clearSession() {
   fs.unlinkSync(sessionFile);
 }
 
-function buildUrl(settings, pathname, params = {}) {
-  const base = safeText(settings?.netease?.apiBase, 500).replace(/\/+$/, '');
-  if (!base) throw new Error('请先在设置中填写音乐服务地址');
-  let url;
+function migrateSession() {
+  if (!sessionFile || !fs.existsSync(sessionFile) || !secrets.canEncrypt()) return false;
   try {
-    url = new URL(`${base}/${String(pathname || '').replace(/^\/+/, '')}`);
+    const saved = JSON.parse(fs.readFileSync(sessionFile, 'utf8'));
+    if (!saved?.cookie || secrets.isEncrypted(saved.cookie)) return false;
+    saveSession(saved.cookie);
+    return true;
   } catch {
-    throw new Error('音乐服务地址无效，请填写完整的 http:// 或 https:// 地址');
+    return false;
   }
-  if (!['http:', 'https:'].includes(url.protocol)) {
-    throw new Error('音乐服务地址仅支持 http:// 或 https://');
-  }
+}
+
+function buildUrl(settings, pathname, params = {}) {
+  const base = security.requireServiceEndpoint(safeText(settings?.netease?.apiBase, 500), '音乐服务地址');
+  const url = new URL(`${base}/${String(pathname || '').replace(/^\/+/, '')}`);
   Object.entries(params).forEach(([key, value]) => {
     if (value !== undefined && value !== null && value !== '') url.searchParams.set(key, String(value));
   });
@@ -449,8 +457,16 @@ async function logout(settings, storage, options = {}) {
 }
 
 function playbackUrlFromResponse(payload) {
-  const url = payload?.data?.[0]?.url;
-  return safeText(url, 1200) || null;
+  const value = safeText(payload?.data?.[0]?.url, 1200);
+  if (!value) return null;
+  try {
+    const url = new URL(value);
+    if (!['http:', 'https:'].includes(url.protocol)) return null;
+    url.protocol = 'https:';
+    return url.toString();
+  } catch {
+    return null;
+  }
 }
 
 async function search(query, settings, options = {}) {
@@ -525,12 +541,15 @@ module.exports = {
   init,
   emptyLibrary,
   buildUrl,
+  clearSession,
+  migrateSession,
   normaliseTrack,
   normaliseAccount,
   normalisePlaylist,
   tracksFromSearch,
   hotTermsFromResponse,
   parseLyrics,
+  playbackUrlFromResponse,
   accountState,
   startQrLogin,
   checkQrLogin,

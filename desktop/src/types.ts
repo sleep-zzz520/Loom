@@ -285,6 +285,30 @@ export interface WorkbenchData {
   };
 }
 
+export type AppUpdateState =
+  | 'unavailable'
+  | 'idle'
+  | 'checking'
+  | 'available'
+  | 'downloading'
+  | 'downloaded'
+  | 'installing'
+  | 'up-to-date'
+  | 'error';
+
+export interface AppUpdateStatus {
+  state: AppUpdateState;
+  currentVersion: string;
+  availableVersion: string | null;
+  releaseNotes: string;
+  releaseDate: string | null;
+  downloadPercent: number | null;
+  message: string;
+  canCheck: boolean;
+  canDownload: boolean;
+  canInstall: boolean;
+}
+
 export interface WorkspaceSnapshot {
   todos: Todo[];
   notes: Note[];
@@ -363,6 +387,15 @@ export interface WeeklyRecentNote {
   id: string;
   title: string;
   updatedAt: string;
+}
+
+export interface WeeklyPlanEntry {
+  id: string;
+  start: string;
+}
+
+export interface WeeklyPlanResult {
+  todoIds: string[];
 }
 
 export interface WeeklySnapshot {
@@ -601,6 +634,13 @@ export interface AgentReply {
 
 export interface WorkbenchApi {
   appInfo: () => Promise<{ name: string; version: string; platform: string }>;
+  updates: {
+    status: () => Promise<AppUpdateStatus>;
+    check: () => Promise<AppUpdateStatus>;
+    download: () => Promise<AppUpdateStatus>;
+    install: () => Promise<AppUpdateStatus>;
+    onStatus: (callback: (status: AppUpdateStatus) => void) => () => void;
+  };
   data: {
     getAll: () => Promise<WorkbenchData>;
     getSettings: () => Promise<AppSettings>;
@@ -624,6 +664,7 @@ export interface WorkbenchApi {
   };
   weekly: {
     getSnapshot: () => Promise<WeeklySnapshot>;
+    applyPlan: (entries: WeeklyPlanEntry[]) => Promise<WeeklyPlanResult>;
   };
   library: {
     importFile: (categoryId?: string) => Promise<{ items: ProfileItem[]; item: ProfileItem } | null>;
