@@ -200,9 +200,10 @@ if (process.env.WORKBENCH_SECURITY_SELF_TEST === '1') {
   assert.equal(serviceOrigin('https://api.example.com/v1'), 'https://api.example.com');
   assert.equal(hasServiceOriginChanged('https://api.example.com/v1', 'https://api.example.com/v2'), false);
   assert.equal(hasServiceOriginChanged('https://api.example.com/v1', 'https://attacker.example/v1'), true);
-  assert.equal(resolveAppAssetPath('loom://app/assets/app.js', '/tmp/loom-dist'), path.join('/tmp/loom-dist', 'assets', 'app.js'));
-  assert.equal(resolveAppAssetPath('loom://app/%2e%2e%2fsecret.txt', '/tmp/loom-dist'), null);
-  assert.equal(resolveAppAssetPath('loom://attacker/index.html', '/tmp/loom-dist'), null);
+  const testDist = path.resolve(require('node:os').tmpdir(), 'loom-dist');
+  assert.equal(resolveAppAssetPath('loom://app/assets/app.js', testDist), path.join(testDist, 'assets', 'app.js'));
+  assert.equal(resolveAppAssetPath('loom://app/%2e%2e%2fsecret.txt', testDist), null);
+  assert.equal(resolveAppAssetPath('loom://attacker/index.html', testDist), null);
 
   const sessionHandlers = {};
   lockDownSession({

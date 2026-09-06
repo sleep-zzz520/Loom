@@ -981,7 +981,7 @@ if (process.env.WORKBENCH_PROACTIVE_SELF_TEST === '1') {
       todoTitle: '准备方案',
       urgency: 'overdue',
       body: '「准备方案」已超期 1 分钟',
-    }, new Date('2026-08-23T10:01:00'));
+    }, new Date('2026-08-23T10:01:00+08:00'));
     assert.equal(deadlineAlert.title, '任务已超期：准备方案');
     assert.equal(deadlineAlert.notifiedAt, '2026-08-23T02:01:00.000Z');
     assert.equal(store.getModule('agentMessages').some((message) => message.suggestionId === deadlineAlert.id), true);
