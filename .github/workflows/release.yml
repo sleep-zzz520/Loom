@@ -1,0 +1,68 @@
+name: Build release installers
+on:
+  push:
+    tags: ['v*']
+permissions:
+  contents: read
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-2022
+            platform: win
+          - os: macos-15
+            platform: mac
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    env:
+      ELECTRON_MIRROR: https://github.com/electron/electron/releases/download/
+      ELECTRON_BUILDER_BINARIES_MIRROR: https://github.com/electron-userland/electron-builder-binaries/releases/download/
+      LOOM_UPDATE_URL: https://github.com/${{ github.repository }}/releases/latest/download
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - name: Check release version
+        run: node -e "if ('v'+require('./desktop/package.json').version !== process.env.GITHUB_REF_NAME) process.exit(1)"
+      - run: npm --prefix desktop ci --registry=https://registry.npmjs.org
+      - run: npm --prefix desktop test
+      - run: npm --prefix desktop run release:${{ matrix.platform }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: installers-${{ matrix.platform }}
+          if-no-files-found: error
+          path: |
+            desktop/release/*.dmg
+            desktop/release/*.exe
+            desktop/release/*.exe.blockmap
+            desktop/release/latest.yml
+  draft:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: installers-*
+          path: installers
+          merge-multiple: true
+      - name: Generate checksums
+        working-directory: installers
+        run: sha256sum *.dmg *.exe *.exe.blockmap latest.yml > SHA256SUMS.txt
+      - name: Create release draft and attach installers
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" --verify-tag --draft --title "Loom $GITHUB_REF_NAME" --notes-file docs/RELEASE_NOTES.md
+          gh release upload "$GITHUB_REF_NAME" installers/*

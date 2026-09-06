@@ -167,9 +167,10 @@ function createUpdateService({
 
   function initialize() {
     if (initialized) return snapshot();
-    if (platform !== 'darwin') return unavailable('当前仅提供 macOS 的应用内更新。');
+    if (platform === 'darwin') return unavailable('macOS 版采用手动更新。请从 GitHub Releases 下载新版，退出 Loom 后替换应用程序中的旧版本。');
+    if (platform !== 'win32') return unavailable('当前平台不提供应用内更新。');
     if (!app.isPackaged) return unavailable('开发模式不检查更新；请从已安装的 Loom 中验证。');
-    if (!hasUpdateConfig(resourcesPath)) return unavailable('当前安装包尚未接入正式更新渠道；首次正式签名发布后即可使用。');
+    if (!hasUpdateConfig(resourcesPath)) return unavailable('当前安装包尚未接入正式更新渠道；请下载已配置更新渠道的 Windows 安装包。');
 
     try {
       updater = updater || require('electron-updater').autoUpdater;

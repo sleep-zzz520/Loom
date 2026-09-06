@@ -8,10 +8,10 @@
     "typecheck": "tsc --noEmit",
     "build": "tsc --noEmit && vite build",
     "start": "electron .",
-    "pack:mac": "npm run build && cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --config electron-builder.config.cjs --mac --dir --publish never",
-    "dist:mac:unsigned": "npm run build && cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --config electron-builder.config.cjs --mac --publish never",
+    "pack:mac": "npm run build && cross-env LOOM_RELEASE=0 CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --config electron-builder.config.cjs --mac --dir --publish never",
+    "dist:mac:unsigned": "npm run build && cross-env LOOM_RELEASE=0 CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --config electron-builder.config.cjs --mac --publish never",
     "release:preflight": "node electron/release-preflight.cjs",
-    "release:mac": "npm run release:preflight && npm run build && cross-env LOOM_RELEASE=1 electron-builder --config electron-builder.config.cjs --mac --publish never && node electron/verify-update-artifacts.cjs",
+    "release:mac": "npm run dist:mac:unsigned",
     "self-test": "cross-env WORKBENCH_SELF_TEST=1 node electron/workspace.cjs",
     "store-self-test": "cross-env WORKBENCH_STORE_SELF_TEST=1 node electron/store.cjs",
     "today-self-test": "cross-env WORKBENCH_TODAY_SELF_TEST=1 node electron/today.cjs",
@@ -36,7 +36,10 @@
     "updates-self-test": "node electron/updates-self-test.cjs",
     "music-service-self-test": "cross-env WORKBENCH_MUSIC_SERVICE_SELF_TEST=1 node electron/music-service.cjs",
     "proactive-self-test": "cross-env WORKBENCH_PROACTIVE_SELF_TEST=1 node electron/proactive.cjs",
-    "test": "npm run build && npm run self-test && npm run store-self-test && npm run today-self-test && npm run weekly-self-test && npm run quick-capture-self-test && npm run mail-self-test && npm run operation-self-test && npm run security-self-test && npm run secrets-self-test && npm run updates-self-test && npm run notifier-self-test && npm run agent-self-test && npm run agent-state-self-test && npm run agent-music-self-test && npm run agent-conversation-title-self-test && npm run profile-avatar-self-test && npm run music-shortcuts-self-test && npm run music-playback-state-self-test && npm run music-lyrics-self-test && npm run music-theme-self-test && npm run music-self-test && npm run music-service-self-test && npm run proactive-self-test"
+    "test": "npm run build && npm run dependency-self-test && npm run self-test && npm run store-self-test && npm run today-self-test && npm run weekly-self-test && npm run quick-capture-self-test && npm run mail-self-test && npm run operation-self-test && npm run security-self-test && npm run secrets-self-test && npm run updates-self-test && npm run notifier-self-test && npm run agent-self-test && npm run agent-state-self-test && npm run agent-music-self-test && npm run agent-conversation-title-self-test && npm run profile-avatar-self-test && npm run music-shortcuts-self-test && npm run music-playback-state-self-test && npm run music-lyrics-self-test && npm run music-theme-self-test && npm run music-self-test && npm run music-service-self-test && npm run proactive-self-test",
+    "dependency-self-test": "node electron/dependency-self-test.cjs",
+    "runtime-smoke-test": "npm run build && electron electron/runtime-smoke-test.cjs",
+    "release:win": "npm run release:preflight && npm run build && cross-env LOOM_RELEASE=1 electron-builder --config electron-builder.config.cjs --win --x64 --publish never && node electron/verify-update-artifacts.cjs"
   },
   "dependencies": {
     "dompurify": "^3.4.14",
@@ -55,10 +58,19 @@
     "@vitejs/plugin-react": "^4.3.4",
     "concurrently": "^9.1.2",
     "cross-env": "^7.0.3",
-    "electron": "^37.2.0",
+    "electron": "44.2.0",
     "electron-builder": "^26.15.3",
     "typescript": "^5.6.3",
     "vite": "^6.3.5",
     "wait-on": "^8.0.3"
+  },
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "overrides": {
+    "NeteaseCloudMusicApi": {
+      "music-metadata": "11.15.0",
+      "qs": "6.16.0"
+    }
   }
 }

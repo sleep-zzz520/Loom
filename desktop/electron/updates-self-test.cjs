@@ -25,7 +25,7 @@ async function run() {
     app: { isPackaged: true, getVersion: () => '0.1.0' },
     autoUpdater: updater,
     emitStatus: (status) => events.push(status),
-    platform: 'darwin',
+    platform: 'win32',
     hasUpdateConfig: () => true,
   });
 
@@ -44,11 +44,35 @@ async function run() {
   const development = createUpdateService({
     app: { isPackaged: false, getVersion: () => '0.1.0' },
     autoUpdater: new FakeUpdater(),
-    platform: 'darwin',
+    platform: 'win32',
   });
   assert.equal(development.initialize().state, 'unavailable');
   assert.match(development.status().message, /开发模式/);
   assert.equal(releaseNotes('<p>安全\u0000更新</p>'), '安全 更新');
+
+  for (const platform of ['darwin', 'linux']) {
+    const blockedUpdater = new FakeUpdater();
+    blockedUpdater.checkForUpdates = () => assert.fail('禁用平台不得检查更新');
+    blockedUpdater.downloadUpdate = () => assert.fail('禁用平台不得下载更新');
+    blockedUpdater.quitAndInstall = () => assert.fail('禁用平台不得安装更新');
+    const blocked = createUpdateService({
+      app: { isPackaged: true, getVersion: () => '0.1.0' },
+      platform,
+      autoUpdater: blockedUpdater,
+      hasUpdateConfig: () => true,
+    });
+    assert.equal(blocked.initialize().state, 'unavailable');
+    if (platform === 'darwin') assert.match(blocked.status().message, /手动更新/);
+    assert.equal((await blocked.check()).canCheck, false);
+    assert.equal((await blocked.download()).canDownload, false);
+    assert.equal(blocked.install().canInstall, false);
+    assert.equal(blockedUpdater.eventNames().length, 0);
+  }
+  const noFeed = createUpdateService({
+    app: { isPackaged: true, getVersion: () => '0.1.0' },
+    platform: 'win32', hasUpdateConfig: () => false,
+  });
+  assert.equal(noFeed.initialize().canCheck, false);
   console.log('updates self-test ok');
 }
 

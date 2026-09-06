@@ -30,17 +30,26 @@ module.exports = {
   ],
   artifactName: '${productName}-${version}-${arch}.${ext}',
   // 正式包写入固定更新源；运行时不会从用户设置读取更新地址，避免更新来源被篡改。
-  publish: isRelease ? [{ provider: 'generic', url: releaseUpdateUrl }] : undefined,
-  mac: {
-    target: ['dmg', 'zip'],
-    category: 'public.app-category.productivity',
-    // 本机构建必须显式无签名；正式发布则强制签名和公证，避免意外把未签名包发给用户。
-    // electron-builder 26 将 macOS 的签名参数直接放在 mac 下；升级到 27 时需迁移到 mac.sign。
-    identity: isRelease ? undefined : null,
-    hardenedRuntime: isRelease,
-    entitlements: isRelease ? 'build/entitlements.mac.plist' : undefined,
-    entitlementsInherit: isRelease ? 'build/entitlements.mac.inherit.plist' : undefined,
-    notarize: isRelease,
+  publish: null,
+  win: {
+    target: [{ target: 'nsis', arch: ['x64'] }],
+    artifactName: '${productName}-Setup-${version}-${arch}.${ext}',
+    publish: isRelease ? [{ provider: 'generic', url: releaseUpdateUrl }] : null,
   },
-  forceCodeSigning: isRelease,
+  nsis: {
+    oneClick: false,
+    allowToChangeInstallationDirectory: true,
+    deleteAppDataOnUninstall: false,
+  },
+  mac: {
+    target: ['dmg'],
+    minimumSystemVersion: '13.0.0',
+    category: 'public.app-category.productivity',
+    // macOS 暂不签名、公证或接入应用内更新，使用 DMG 手动安装。
+    identity: null,
+    hardenedRuntime: false,
+    notarize: false,
+    publish: null,
+  },
+  forceCodeSigning: false,
 };

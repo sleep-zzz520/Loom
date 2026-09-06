@@ -571,22 +571,22 @@ export default function Settings({ section }: SettingsProps) {
             <div className="settings-subsection-head">
               <div>
                 <h3 id="app-update-title">应用更新</h3>
-                <p>新版本由你确认下载；下载完成后，再由你决定何时重启安装。</p>
+                <p>macOS 下载新版安装包手动更新；Windows 可在应用内确认下载和安装。</p>
               </div>
             </div>
             <div className={`settings-update-card is-${updateStatus?.state || 'loading'}`} aria-live="polite">
               <div className="settings-update-copy">
                 <span className="settings-update-kicker">当前版本 {updateStatus?.currentVersion || '读取中…'}</span>
-                <strong>{updateStatus?.state === 'available' ? `Loom ${updateStatus.availableVersion || '新版本'} 已可下载` : updateStatus?.state === 'downloaded' ? '新版本已准备好' : updateStatus?.state === 'downloading' ? '正在下载新版本' : updateStatus?.state === 'checking' ? '正在检查新版本' : updateStatus?.state === 'up-to-date' ? '已经是最新版本' : updateStatus?.state === 'unavailable' ? '应用内更新尚未启用' : updateStatus?.state === 'error' ? '暂时无法检查更新' : '可以检查新版本'}</strong>
+                <strong>{updateStatus?.state === 'available' ? `Loom ${updateStatus.availableVersion || '新版本'} 已可下载` : updateStatus?.state === 'downloaded' ? '新版本已准备好' : updateStatus?.state === 'downloading' ? '正在下载新版本' : updateStatus?.state === 'checking' ? '正在检查新版本' : updateStatus?.state === 'up-to-date' ? '已经是最新版本' : updateStatus?.state === 'unavailable' ? '此版本不提供应用内更新' : updateStatus?.state === 'error' ? '暂时无法检查更新' : '可以检查新版本'}</strong>
                 <p>{updateStatus?.message || '正在读取更新状态…'}</p>
                 {updateStatus?.releaseNotes && <small className="settings-update-notes">本次更新：{updateStatus.releaseNotes}</small>}
                 {updateStatus?.state === 'downloading' && <span className="settings-update-progress" aria-label={`下载进度 ${updateStatus.downloadPercent ?? 0}%`}><i style={{ width: `${updateStatus.downloadPercent ?? 0}%` }} /></span>}
               </div>
-              <div className="settings-update-actions">
+              {updateStatus?.state !== 'unavailable' && <div className="settings-update-actions">
                 {updateStatus?.canInstall ? <button type="button" className="settings-update-primary" onClick={() => void runUpdateAction('install')} disabled={updateBusy}>重启并更新</button>
                   : updateStatus?.canDownload ? <button type="button" className="settings-update-primary" onClick={() => void runUpdateAction('download')} disabled={updateBusy}>下载更新</button>
-                    : <button type="button" className="settings-update-secondary" onClick={() => void runUpdateAction('check')} disabled={updateBusy || updateStatus?.canCheck === false}>检查更新</button>}
-              </div>
+                    : <button type="button" className="settings-update-secondary" onClick={() => void runUpdateAction('check')} disabled={updateBusy || !updateStatus?.canCheck}>检查更新</button>}
+              </div>}
             </div>
           </section>
           <section className="settings-subsection settings-subsection--persona" aria-labelledby="agent-persona-title">
