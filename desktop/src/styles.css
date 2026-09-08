@@ -44,6 +44,34 @@ body {
   text-rendering: optimizeLegibility;
 }
 
+/* Use the same quiet scrollbar treatment on Windows and macOS. */
+::-webkit-scrollbar {
+  width: 7px;
+  height: 7px;
+}
+
+::-webkit-scrollbar-track,
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background: rgba(112, 123, 142, 0.32);
+  background-clip: padding-box;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(112, 123, 142, 0.55);
+}
+
+::-webkit-scrollbar-button {
+  display: none;
+  width: 0;
+  height: 0;
+}
+
 button {
   font: inherit;
 }
@@ -3010,7 +3038,6 @@ textarea:focus-visible {
   border: 0;
   border-radius: 0;
   background: #fbfaf8;
-  scrollbar-color: rgba(88, 100, 138, 0.22) transparent;
   overscroll-behavior: contain;
 }
 
@@ -8952,8 +8979,6 @@ button:disabled {
   overflow: auto;
   border-top: 1px solid rgba(31, 45, 65, 0.07);
   border-bottom: 1px solid rgba(31, 45, 65, 0.07);
-  scrollbar-width: thin;
-  scrollbar-color: #d7dde6 transparent;
 }
 
 .music-results:not(.is-listening) .music-results-list {
@@ -10698,8 +10723,6 @@ button:disabled {
   overflow: auto;
   border-top: 1px solid rgba(38, 47, 61, 0.09);
   border-bottom: 1px solid rgba(38, 47, 61, 0.07);
-  scrollbar-width: thin;
-  scrollbar-color: #d5dbe3 transparent;
 }
 
 .music-now-page-queue-head {
@@ -13437,13 +13460,8 @@ button:disabled {
 }
 
 .profile-avatar-input {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  overflow: hidden;
-  clip: rect(0 0 0 0);
-  clip-path: inset(50%);
-  white-space: nowrap;
+  /* The upload button opens this input; keep form-field sizing out of layout. */
+  display: none;
 }
 
 .profile-avatar-actions {
@@ -14072,7 +14090,6 @@ button:disabled {
   overflow-y: auto;
   color: #8490a0;
   outline: none;
-  scrollbar-width: thin;
   scroll-behavior: smooth;
   mask-image: linear-gradient(to bottom, transparent, black 11%, black 88%, transparent);
 }
@@ -14332,7 +14349,6 @@ button:disabled {
   display: grid;
   min-height: 0;
   overflow-y: auto;
-  scrollbar-width: thin;
 }
 
 .music-now-page-queue-list:focus-visible {
@@ -17276,8 +17292,6 @@ button:disabled {
 
   .music-library-playlist-list {
     padding: 0 3px 3px;
-    scrollbar-color: rgba(112, 128, 150, 0.32) transparent;
-    scrollbar-width: thin;
   }
 
   .music-library-playlist {
@@ -17326,24 +17340,7 @@ button:disabled {
   .music-library-playlist.is-active strong { color: hsl(var(--music-theme-hue) 36% 35%); }
   .music-library-playlist.is-active > svg { color: hsl(var(--music-theme-hue) 40% 48%); }
 
-  .music-library-playlist-list::-webkit-scrollbar,
-  .music-library-track-list.music-track-list::-webkit-scrollbar {
-    width: 8px;
-  }
 
-  .music-library-playlist-list::-webkit-scrollbar-thumb,
-  .music-library-track-list.music-track-list::-webkit-scrollbar-thumb {
-    border: 3px solid transparent;
-    border-radius: 999px;
-    background: rgba(112, 128, 150, 0.3);
-    background-clip: padding-box;
-  }
-
-  .music-library-playlist-list::-webkit-scrollbar-thumb:hover,
-  .music-library-track-list.music-track-list::-webkit-scrollbar-thumb:hover {
-    background: rgba(89, 110, 143, 0.5);
-    background-clip: padding-box;
-  }
 }
 
 /* 曲目行本身可点击；播放提示只在需要时从封面浮现，避免重新塞回一列常驻按钮。 */

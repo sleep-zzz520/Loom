@@ -42,6 +42,35 @@ async function run(win) {
   assert.equal(preferences.contextIsolation, true);
   assert.equal(preferences.nodeIntegration, false);
 
+  // Hidden file inputs must not enlarge the viewport and create outer scrollbars.
+  await evaluate(async () => {
+    [...document.querySelectorAll('.sidebar button')].find((item) => item.textContent.trim() === '设置').click();
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    [...document.querySelectorAll('.sidebar button')].find((item) => item.textContent.trim() === '个人资料').click();
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      if (document.querySelector('.profile-avatar-input')) return;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    throw new Error('Profile settings did not render');
+  });
+  for (const width of [960, 1280]) {
+    win.setContentSize(width, 740);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    const layout = await evaluate(() => {
+      const root = document.documentElement;
+      const content = document.querySelector('.content');
+      content.scrollTop = content.scrollHeight;
+      return {
+        outerOverflow: root.scrollWidth > root.clientWidth || root.scrollHeight > root.clientHeight,
+        contentOverflowX: content.scrollWidth > content.clientWidth,
+        canScroll: content.scrollTop > 0,
+        fileInputHidden: document.querySelector('.profile-avatar-input').getClientRects().length === 0,
+      };
+    });
+    assert.deepEqual(layout, { outerOverflow: false, contentOverflowX: false, canScroll: true, fileInputHidden: true }, `Profile layout at ${width}px`);
+  }
+  console.log('[runtime] profile has no outer scrollbars; content scrolling preserved');
+
   const initial = await evaluate(async () => ({
     title: document.title,
     nodeAvailable: typeof window.require !== 'undefined',
