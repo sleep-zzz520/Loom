@@ -533,7 +533,7 @@ export default function App() {
                 {[
                   { key: 'settings-profile', label: '个人资料' },
                   { key: 'settings-notifications', label: '通知' },
-                  { key: 'settings-config', label: '配置' },
+                  { key: 'settings-config', label: '系统与 Agent' },
                 ].map(({ key, label }) => (
                   <button
                     key={key}

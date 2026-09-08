@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type ChangeEvent, type FormEvent } from 'react';
+import { useCallback, useEffect, useRef, useState, type ChangeEvent } from 'react';
 import type { SettingsKey } from '../App';
 import type { AppSettings, AppUpdateStatus, BackupRecord, NotificationHistoryItem } from '../types';
 import { TimeField } from '../components/DateFields';
@@ -11,9 +11,21 @@ type SettingsProps = {
 type SettingsSaveState = 'saved' | 'saving' | 'error';
 
 const SAVE_STATE_LABEL: Record<SettingsSaveState, string> = {
-  saved: '✓ 已保存',
+  saved: '已自动保存',
   saving: '保存中…',
-  error: '保存失败',
+  error: '保存失败，请重试',
+};
+
+const SETTINGS_PAGE_META: Record<SettingsKey, { title: string }> = {
+  'settings-profile': {
+    title: '个人资料',
+  },
+  'settings-notifications': {
+    title: '通知',
+  },
+  'settings-config': {
+    title: '系统与 Agent',
+  },
 };
 
 const AGENT_PERSONALITY_OPTIONS: Array<{ value: AppSettings['agent']['persona']['personality']; label: string; hint: string }> = [
@@ -31,6 +43,7 @@ const AGENT_PROACTIVE_STYLE_OPTIONS: Array<{ value: AppSettings['agent']['person
 ];
 
 export default function Settings({ section }: SettingsProps) {
+  const pageMeta = SETTINGS_PAGE_META[section];
   const [settings, setSettingsState] = useState<AppSettings | null>(null);
   const [history, setHistory] = useState<NotificationHistoryItem[]>([]);
   const [saveState, setSaveState] = useState<SettingsSaveState>('saved');
@@ -132,9 +145,8 @@ export default function Settings({ section }: SettingsProps) {
     setSaveState('saving');
   }
 
-  function save(event: FormEvent) {
-    event.preventDefault();
-    if (!settings) return;
+  function retrySave() {
+    if (!settings || saveState === 'saving') return;
     saveRevisionRef.current += 1;
     setSaveState('saving');
   }
@@ -278,15 +290,27 @@ export default function Settings({ section }: SettingsProps) {
 
   return (
     <section className="module-page">
-      <form id="settings-form" className={`settings-grid settings-grid--${section}`} onSubmit={save}>
+      <div className={`settings-grid settings-grid--${section}`}>
         <section className="settings-section" data-settings-page={section} aria-label="设置内容">
+          <header className="settings-page-header">
+            <div className="settings-page-heading">
+              <span className="settings-eyebrow">设置</span>
+              <h2>{pageMeta.title}</h2>
+            </div>
+            <div className="settings-save-bar">
+              <span className={`settings-save-state ${saveState}`} role="status" aria-live="polite">
+                <span className="settings-save-state-dot" aria-hidden="true" />
+                <span>{SAVE_STATE_LABEL[saveState]}</span>
+              </span>
+              {saveState === 'error' && <button type="button" className="settings-save-retry" onClick={retrySave}>重试</button>}
+            </div>
+          </header>
           <div key={section} className={`settings-section-content settings-section-content--${section}`}>
           {section === 'settings-profile' && <>
           <section className="settings-subsection settings-subsection--identity" aria-labelledby="profile-identity-title">
             <div className="settings-subsection-head">
               <div>
                 <h3 id="profile-identity-title">个人身份</h3>
-                <p>姓名、称呼和当前工作场景，帮助 Agent 读懂你的上下文。</p>
               </div>
             </div>
             <div className="settings-profile-identity">
@@ -339,19 +363,17 @@ export default function Settings({ section }: SettingsProps) {
           <section className="settings-subsection settings-subsection--context" aria-labelledby="profile-context-title">
             <div className="settings-subsection-head">
               <div>
-                <h3 id="profile-context-title">关于我</h3>
-                <p>添加一些相对稳定的背景信息；近期任务放在当前重点里。</p>
+                <h3 id="profile-context-title">个人背景</h3>
               </div>
             </div>
             <label className="field">
-              <span>关于我</span>
+              <span>长期背景</span>
               <textarea
                 rows={3}
                 value={settings.profile.about}
                 onChange={(event) => update({ profile: { ...settings.profile, about: event.target.value } })}
-                placeholder="例如：我主要做桌面应用和自动化工具，平时负责产品设计、开发和文档整理。"
+                placeholder="如：独立开发、产品设计与文档整理。"
               />
-              <small className="field-hint">可以填写职业、兴趣、长期背景等。</small>
             </label>
             <label className="field">
               <span>当前重点</span>
@@ -359,9 +381,8 @@ export default function Settings({ section }: SettingsProps) {
                 rows={2}
                 value={settings.profile.currentFocus}
                 onChange={(event) => update({ profile: { ...settings.profile, currentFocus: event.target.value } })}
-                placeholder="例如：目前正在完善 Loom，优先处理待办、资料整理和 Agent 工作流。"
+                placeholder="如：完成 Loom 设置页改造。"
               />
-              <small className="field-hint">写下当前最重要的一件事即可。</small>
             </label>
           </section>
 
@@ -369,7 +390,6 @@ export default function Settings({ section }: SettingsProps) {
             <div className="settings-subsection-head">
               <div>
                 <h3 id="profile-agent-title">Agent 工作方式</h3>
-                <p>把常用的沟通习惯变成明确选项，减少重复说明。</p>
               </div>
             </div>
             <div className="settings-profile-preferences">
@@ -421,7 +441,6 @@ export default function Settings({ section }: SettingsProps) {
             <div className="settings-subsection-head">
               <div>
                 <h3 id="profile-rules-title">长期规则</h3>
-                <p>长期有效的工作习惯或约束，每行一条。</p>
               </div>
             </div>
             <label className="field">
@@ -437,15 +456,13 @@ export default function Settings({ section }: SettingsProps) {
                 })}
                 placeholder={'例如：\n先讲结论，再说明原因\n代码修改尽量小，不做无关重构\n涉及删除数据时先提醒我'}
               />
-              <small className="field-hint">每行一条，写下你希望工作台长期遵循的习惯。</small>
             </label>
           </section>
           </>}
 
           {section === 'settings-notifications' && <>
-          <fieldset className="notify-fieldset settings-notify-rhythm">
+          <fieldset className="notify-fieldset settings-subsection settings-notify-rhythm">
             <legend>截止提醒</legend>
-            <p>在截止前发送桌面提醒；超期事项会额外尝试发送手机推送。</p>
             <div className="notify-checks">
               {[
                 { minutes: 1440, label: '提前 1 天' },
@@ -463,53 +480,59 @@ export default function Settings({ section }: SettingsProps) {
               ))}
             </div>
           </fieldset>
-          <div className="notify-time-row">
+          <section className="settings-subsection" aria-labelledby="notification-rhythm-title">
+            <div className="settings-subsection-head">
+              <h3 id="notification-rhythm-title">提醒节奏</h3>
+            </div>
+            <div className="notify-time-row">
+              <label className="field">
+                <span>免打扰开始</span>
+                <TimeField
+                  value={settings.notify.quietHours.start}
+                  ariaLabel="免打扰开始时间"
+                  onChange={(start) => update({ notify: { ...settings.notify, quietHours: { ...settings.notify.quietHours, start } } })}
+                />
+              </label>
+              <label className="field">
+                <span>免打扰结束</span>
+                <TimeField
+                  value={settings.notify.quietHours.end}
+                  ariaLabel="免打扰结束时间"
+                  onChange={(end) => update({ notify: { ...settings.notify, quietHours: { ...settings.notify.quietHours, end } } })}
+                />
+              </label>
+            </div>
             <label className="field">
-              <span>免打扰开始</span>
-              <TimeField
-                value={settings.notify.quietHours.start}
-                ariaLabel="免打扰开始时间"
-                onChange={(start) => update({ notify: { ...settings.notify, quietHours: { ...settings.notify.quietHours, start } } })}
+              <span>每日主动提醒上限</span>
+              <input
+                type="number"
+                min="1"
+                max="20"
+                value={settings.notify.maxDailyNotifications}
+                onChange={(event) => update({ notify: { ...settings.notify, maxDailyNotifications: Math.min(20, Math.max(1, Number(event.target.value) || 1)) } })}
               />
             </label>
+          </section>
+          <section className="settings-subsection" aria-labelledby="notification-channel-title">
+            <div className="settings-subsection-head">
+              <h3 id="notification-channel-title">手机推送</h3>
+            </div>
             <label className="field">
-              <span>免打扰结束</span>
-              <TimeField
-                value={settings.notify.quietHours.end}
-                ariaLabel="免打扰结束时间"
-                onChange={(end) => update({ notify: { ...settings.notify, quietHours: { ...settings.notify.quietHours, end } } })}
-              />
+              <span>推送渠道</span>
+              <select
+                value={settings.notify.channel}
+                onChange={(event) =>
+                  update({ notify: { ...settings.notify, channel: event.target.value as 'ntfy' | 'bark' | 'none' } })
+                }
+              >
+                <option value="ntfy">ntfy（Android / 通用）</option>
+                <option value="bark">Bark（iOS 推荐）</option>
+                <option value="none">关闭手机推送</option>
+              </select>
             </label>
-          </div>
-          <label className="field">
-            <span>每日主动提醒上限</span>
-            <input
-              type="number"
-              min="1"
-              max="20"
-              value={settings.notify.maxDailyNotifications}
-              onChange={(event) => update({ notify: { ...settings.notify, maxDailyNotifications: Math.min(20, Math.max(1, Number(event.target.value) || 1)) } })}
-            />
-          </label>
-          <p className="settings-detail-note">
-            系统会自动识别法定节假日和 5·20 等常见日期；生日、纪念日等私人日期，直接在 Agent 对话里告诉它即可。
-          </p>
-          <label className="field">
-            <span>推送渠道</span>
-            <select
-              value={settings.notify.channel}
-              onChange={(event) =>
-                update({ notify: { ...settings.notify, channel: event.target.value as 'ntfy' | 'bark' | 'none' } })
-              }
-            >
-              <option value="ntfy">ntfy（Android / 通用）</option>
-              <option value="bark">Bark（iOS 推荐）</option>
-              <option value="none">关闭手机推送</option>
-            </select>
-          </label>
 
-          {settings.notify.channel !== 'none' && (
-            <div key={settings.notify.channel} className="settings-channel-panel" aria-live="polite">
+            {settings.notify.channel !== 'none' && (
+              <div key={settings.notify.channel} className="settings-channel-panel" aria-live="polite">
             {settings.notify.channel === 'ntfy' && <>
               <label className="field">
                 <span>Service URL</span>
@@ -532,7 +555,7 @@ export default function Settings({ section }: SettingsProps) {
                 />
               </label>
               <p className="settings-detail-note">
-                手机安装 ntfy App → 点右下角订阅 → 输入同一个 topic 名称 → 完成。
+                在 ntfy 中订阅相同 Topic。
               </p>
             </>}
 
@@ -548,21 +571,24 @@ export default function Settings({ section }: SettingsProps) {
                 />
               </label>
               <p className="settings-detail-note">
-                App Store 搜索 Bark 安装 → 打开 App 复制推送地址 → 粘贴到上面输入框 → 保存后回到待办页点「测试手机推送」验证。
+                粘贴 Bark App 中复制的推送地址。
               </p>
             </>}
             </div>
-          )}
+            )}
+          </section>
           {history.length > 0 && (
-            <div className="notification-history" aria-label="最近通知">
-              <p>最近通知</p>
-              {history.slice(0, 5).map((item) => (
-                <div key={item.id}>
-                  <strong>{item.title}</strong>
-                  <span>{item.body} · {new Date(item.sentAt).toLocaleString('zh-CN', { hour12: false })}</span>
-                </div>
-              ))}
-            </div>
+            <section className="settings-subsection">
+              <div className="notification-history" aria-label="最近通知">
+                <p>最近通知</p>
+                {history.slice(0, 5).map((item) => (
+                  <div key={item.id}>
+                    <strong>{item.title}</strong>
+                    <span>{item.body} · {new Date(item.sentAt).toLocaleString('zh-CN', { hour12: false })}</span>
+                  </div>
+                ))}
+              </div>
+            </section>
           )}
           </>}
 
@@ -571,7 +597,6 @@ export default function Settings({ section }: SettingsProps) {
             <div className="settings-subsection-head">
               <div>
                 <h3 id="app-update-title">应用更新</h3>
-                <p>macOS 下载新版安装包手动更新；Windows 可在应用内确认下载和安装。</p>
               </div>
             </div>
             <div className={`settings-update-card is-${updateStatus?.state || 'loading'}`} aria-live="polite">
@@ -593,7 +618,6 @@ export default function Settings({ section }: SettingsProps) {
             <div className="settings-subsection-head">
               <div>
                 <h3 id="agent-persona-title">身份与沟通</h3>
-                <p>这些设定会用于普通对话、后台主动检查和主动消息；不会改变数据确认与安全边界。</p>
               </div>
             </div>
             <label className="field">
@@ -606,7 +630,6 @@ export default function Settings({ section }: SettingsProps) {
                 maxLength={32}
                 placeholder="例如：小栖"
               />
-              <small className="field-hint">会显示在主动消息和桌面通知中；留空时使用「Agent」。</small>
             </label>
             <fieldset className="settings-choice-fieldset">
               <legend>基础人格</legend>
@@ -656,20 +679,17 @@ export default function Settings({ section }: SettingsProps) {
                 maxLength={1200}
                 placeholder="例如：少用表情；发现风险先直说；讨论创意时先给三个方向。"
               />
-              <small className="field-hint">写下希望它长期遵守的称呼、语气、协作习惯或表达偏好。</small>
             </label>
           </section>
           <section className="settings-subsection settings-subsection--proactive" aria-labelledby="agent-proactive-title">
             <div className="settings-subsection-head">
               <div>
                 <h3 id="agent-proactive-title">主动发现</h3>
-                <p>关闭后，Agent 不会在后台自动检查或发送主动跟进提醒。</p>
               </div>
             </div>
             <label className={`settings-toggle${settings.agent.proactiveEnabled !== false ? ' is-on' : ''}`}>
               <span className="settings-toggle-copy">
                 <strong>启用主动建议</strong>
-                <small>保留已有建议和运行记录，不影响手动聊天。</small>
               </span>
               <input
                 type="checkbox"
@@ -682,7 +702,6 @@ export default function Settings({ section }: SettingsProps) {
             <label className={`settings-toggle${settings.agent.emailMonitorEnabled ? ' is-on' : ''}`}>
               <span className="settings-toggle-copy">
                 <strong>智能邮件提醒</strong>
-                <small>每 30 秒检查新邮件；营销邮件会在本地直接静默过滤，其余邮件由已配置的 Agent 分为高、中、低、垃圾四级。垃圾邮件不提示；需要行动时只生成待确认的待办建议。</small>
               </span>
               <input
                 type="checkbox"
@@ -697,7 +716,6 @@ export default function Settings({ section }: SettingsProps) {
             <div className="settings-subsection-head">
               <div>
                 <h3 id="agent-service-title">Agent 服务</h3>
-                <p>连接模型服务时使用的地址、密钥和模型。</p>
               </div>
             </div>
             <label className="field">
@@ -709,7 +727,7 @@ export default function Settings({ section }: SettingsProps) {
                 }
                 placeholder="https://api.deepseek.com/v1"
               />
-              <small className="field-hint">远程服务必须使用 HTTPS；改到新服务来源后，已保存的密钥会被清除，需要重新输入。</small>
+              <small className="field-hint">远程服务需使用 HTTPS；切换来源后需重新输入密钥。</small>
             </label>
             <label className="field">
               <span>API 密钥</span>
@@ -721,7 +739,7 @@ export default function Settings({ section }: SettingsProps) {
                 }
                 placeholder="sk-..."
               />
-              <small className="field-hint">已保存的密钥不会回显；留空会保留原密钥，输入新值即可替换。</small>
+              <small className="field-hint">已保存的密钥不会回显；留空会保留现有密钥。</small>
             </label>
             <label className="field">
               <span>模型</span>
@@ -738,7 +756,6 @@ export default function Settings({ section }: SettingsProps) {
             <summary>
               <span className="settings-advanced-summary-copy">
                 <strong id="music-service-title">音乐服务</strong>
-                <small>默认使用工作台内置音乐服务；只有使用兼容服务时才需要调整。</small>
               </span>
               <span className="settings-advanced-label">高级</span>
             </summary>
@@ -750,7 +767,7 @@ export default function Settings({ section }: SettingsProps) {
                   onChange={(event) => update({ netease: { apiBase: event.target.value } })}
                   placeholder="http://127.0.0.1:3000"
                 />
-              <small className="field-hint">保留默认地址时由工作台自动管理，不需要手动启动网页或终端服务；远程服务必须使用 HTTPS，改到新来源会退出当前音乐账号。</small>
+              <small className="field-hint">默认地址由工作台管理；切换远程服务会退出音乐账号。</small>
               </label>
             </div>
           </details>
@@ -758,7 +775,7 @@ export default function Settings({ section }: SettingsProps) {
             <div className="settings-subsection-head">
               <div>
                 <h3 id="data-recovery-title">数据与恢复</h3>
-                <p>自动恢复点会在数据变更前保留近期版本。导出与备份不会包含邮箱授权、Agent 密钥或同步令牌。</p>
+                <p>备份和导出不包含密钥。</p>
               </div>
             </div>
             <div className="settings-recovery-actions">
@@ -772,17 +789,8 @@ export default function Settings({ section }: SettingsProps) {
           </section>
           </>}
           </div>
-          <footer className="settings-save-bar">
-            <span className={`settings-save-state ${saveState}`} role="status" aria-live="polite">
-              <span className="settings-save-state-dot" aria-hidden="true" />
-              <span>{SAVE_STATE_LABEL[saveState]}</span>
-            </span>
-            <button className="settings-save" type="submit" disabled={saveState === 'saving'}>
-              {saveState === 'saving' ? '正在保存' : '保存设置'}
-            </button>
-          </footer>
         </section>
-      </form>
+      </div>
     </section>
   );
 }
