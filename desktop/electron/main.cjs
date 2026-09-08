@@ -85,6 +85,9 @@ function createWindow() {
       webviewTag: false,
     },
   });
+  if (process.platform === 'win32') {
+    win.removeMenu();
+  }
   mainWindow = win;
   security.lockDownSession(win.webContents.session);
   security.installRendererGuards(win.webContents, {
