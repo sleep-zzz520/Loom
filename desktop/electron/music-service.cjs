@@ -68,16 +68,8 @@ function waitForListening(candidate) {
 }
 
 function startOnEphemeralPort(serveNcmApi, options) {
-  // NeteaseCloudMusicApi 将数值 0 当作 falsy，只有通过环境变量字符串才能让它交给系统选空闲端口。
-  // 函数在首个 await 前读取 PORT，因此恢复环境变量不会影响服务的实际监听端口。
-  const previousPort = process.env.PORT;
-  try {
-    process.env.PORT = '0';
-    return serveNcmApi({ ...options, port: 0 });
-  } finally {
-    if (previousPort === undefined) delete process.env.PORT;
-    else process.env.PORT = previousPort;
-  }
+  // 上游库把数值 0 当作 falsy；传入字符串 '0' 可通过它的判断，并在 Number 转换后让系统分配空闲端口。
+  return serveNcmApi({ ...options, port: '0' });
 }
 
 function listeningBase(candidate) {
@@ -173,7 +165,7 @@ if (process.env.WORKBENCH_MUSIC_SERVICE_SELF_TEST === '1') {
     assert.equal(Object.keys(require.cache).some((file) => file.includes(`${path.sep}music-metadata${path.sep}`)), false);
 
     const embedded = await start({ netease: { apiBase: DEFAULT_BASE } });
-    assert.equal(embedded.ready, true);
+    assert.equal(embedded.ready, true, embedded.error);
     assert.equal(embedded.embedded, true);
     assert.match(embedded.base, /^http:\/\/127\.0\.0\.1:\d+$/);
     assert.notEqual(embedded.base, DEFAULT_BASE);
