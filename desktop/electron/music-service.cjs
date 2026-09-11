@@ -1,8 +1,22 @@
+const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const security = require('./security.cjs');
 
 const DEFAULT_BASE = 'http://127.0.0.1:3000';
 const DEFAULT_HOST = '127.0.0.1';
+
+function ensureAnonymousTokenFile(tempDirectory = os.tmpdir()) {
+  const tokenPath = path.join(tempDirectory, 'anonymous_token');
+  if (fs.existsSync(tokenPath)) return tokenPath;
+  try {
+    // 第三方库会在模块加载时同步读取该文件；只在首次启动创建空文件，绝不覆盖已有匿名令牌。
+    fs.writeFileSync(tokenPath, '', { encoding: 'utf8', flag: 'wx', mode: 0o600 });
+  } catch (error) {
+    if (error?.code !== 'EEXIST') throw error;
+  }
+  return tokenPath;
+}
 
 const MUSIC_ROUTE_MODULES = [
   ['login_status', '/login/status'],
@@ -97,6 +111,7 @@ async function start(settings = {}) {
   let candidate = null;
   try {
     // 只加载 Loom 实际调用的模块，避免把第三方包的文件上传、云盘等整套路由暴露在本机端口。
+    ensureAnonymousTokenFile();
     const { serveNcmApi } = require('NeteaseCloudMusicApi/server');
     const app = await startOnEphemeralPort(serveNcmApi, {
       host: DEFAULT_HOST,
@@ -143,6 +158,7 @@ function stop() {
 module.exports = {
   DEFAULT_BASE,
   MUSIC_ROUTE_MODULES,
+  ensureAnonymousTokenFile,
   normaliseBase,
   musicModuleDefinitions,
   shouldEmbed,
@@ -158,6 +174,13 @@ if (process.env.WORKBENCH_MUSIC_SERVICE_SELF_TEST === '1') {
     assert.equal(shouldEmbed(''), true);
     assert.equal(shouldEmbed(DEFAULT_BASE), true);
     assert.equal(shouldEmbed('https://music.example.test'), false);
+    const tokenTestDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'loom-music-service-'));
+    try {
+      const tokenPath = ensureAnonymousTokenFile(tokenTestDirectory);
+      assert.equal(fs.readFileSync(tokenPath, 'utf8'), '');
+    } finally {
+      fs.rmSync(tokenTestDirectory, { recursive: true, force: true });
+    }
     const definitions = musicModuleDefinitions();
     assert.equal(definitions.length, MUSIC_ROUTE_MODULES.length);
     assert.ok(definitions.some((definition) => definition.route === '/song/url/v1'));
