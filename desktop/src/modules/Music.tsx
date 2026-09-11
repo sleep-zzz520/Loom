@@ -93,6 +93,7 @@ export default function Music({
   const [isMuted, setIsMuted] = useState(false);
   const [serviceBase, setServiceBase] = useState('');
   const [serviceReady, setServiceReady] = useState(true);
+  const [serviceError, setServiceError] = useState('');
   const [error, setError] = useState('');
   const [libraryError, setLibraryError] = useState('');
   const [library, setLibrary] = useState<MusicLibrary>(EMPTY_MUSIC_LIBRARY);
@@ -256,11 +257,17 @@ export default function Music({
       setServiceBase(status.base || '');
       setServiceReady(status.ready);
       if (!status.ready) {
-        setLibraryError(status.error || '音乐服务尚未就绪，请稍后重试。');
+        const message = status.error || '音乐服务尚未就绪，请稍后重试。';
+        setServiceError(message);
+        setLibraryError(message);
+      } else {
+        setServiceError('');
       }
     }).catch(() => {
       setServiceReady(false);
-      setLibraryError('音乐服务尚未就绪，请稍后重试。');
+      const message = '音乐服务尚未就绪，请稍后重试。';
+      setServiceError(message);
+      setLibraryError(message);
     });
     window.workbench.music.accountState().then((next) => {
       setLibrary(next);
@@ -422,7 +429,7 @@ export default function Music({
 
   async function startAccountLogin() {
     if (!serviceReady) {
-      setLibraryError('音乐服务尚未就绪，请稍后重试。');
+      setLibraryError(serviceError || '音乐服务尚未就绪，请稍后重试。');
       return;
     }
     if (!serviceBase.trim()) {

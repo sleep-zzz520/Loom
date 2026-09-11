@@ -71,6 +71,41 @@ async function run(win) {
   }
   console.log('[runtime] profile has no outer scrollbars; content scrolling preserved');
 
+  await evaluate(async () => {
+    const musicButton = [...document.querySelectorAll('.sidebar button')].find((item) => item.textContent.trim() === '音乐');
+    if (!musicButton) throw new Error('Music navigation button missing');
+    musicButton.click();
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      if (document.querySelectorAll('.music-discover-feature-grid .music-feature-art').length === 4) return;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    throw new Error('Music discovery cards did not render');
+  });
+  const musicArtworkHeights = [];
+  for (const height of [780, 1020]) {
+    win.setContentSize(1280, height);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    const layout = await evaluate(() => {
+      const arts = [...document.querySelectorAll('.music-discover-feature-grid .music-feature-art')];
+      const content = document.querySelector('.content');
+      return {
+        artSizes: arts.map((art) => {
+          const rect = art.getBoundingClientRect();
+          return { width: rect.width, height: rect.height };
+        }),
+        contentOverflowX: content.scrollWidth > content.clientWidth,
+      };
+    });
+    assert.equal(layout.artSizes.length, 4, `Music artwork count at ${height}px`);
+    assert.equal(layout.contentOverflowX, false, `Music layout horizontal overflow at ${height}px`);
+    for (const art of layout.artSizes) {
+      assert.ok(Math.abs((art.width / art.height) - (17 / 25)) < 0.015, `Music artwork ratio at ${height}px`);
+    }
+    musicArtworkHeights.push(layout.artSizes[0].height);
+  }
+  assert.ok(Math.abs(musicArtworkHeights[0] - musicArtworkHeights[1]) < 1, 'Music artwork must not stretch when only window height changes');
+  console.log('[runtime] music discovery artwork keeps its aspect ratio while the window resizes');
+
   const initial = await evaluate(async () => ({
     title: document.title,
     nodeAvailable: typeof window.require !== 'undefined',

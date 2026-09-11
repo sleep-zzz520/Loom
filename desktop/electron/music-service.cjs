@@ -1,10 +1,8 @@
-const http = require('node:http');
 const path = require('node:path');
 const security = require('./security.cjs');
 
 const DEFAULT_BASE = 'http://127.0.0.1:3000';
 const DEFAULT_HOST = '127.0.0.1';
-const DEFAULT_PORT = 3000;
 
 const MUSIC_ROUTE_MODULES = [
   ['login_status', '/login/status'],
@@ -69,16 +67,26 @@ function waitForListening(candidate) {
   });
 }
 
-function probeExistingService(base = DEFAULT_BASE) {
-  const target = `${normaliseBase(base) || DEFAULT_BASE}/`;
-  return new Promise((resolve) => {
-    const request = http.get(target, { timeout: 1500 }, (response) => {
-      response.resume();
-      resolve(true);
-    });
-    request.once('timeout', () => request.destroy());
-    request.once('error', () => resolve(false));
-  });
+function startOnEphemeralPort(serveNcmApi, options) {
+  // NeteaseCloudMusicApi 将数值 0 当作 falsy，只有通过环境变量字符串才能让它交给系统选空闲端口。
+  // 函数在首个 await 前读取 PORT，因此恢复环境变量不会影响服务的实际监听端口。
+  const previousPort = process.env.PORT;
+  try {
+    process.env.PORT = '0';
+    return serveNcmApi({ ...options, port: 0 });
+  } finally {
+    if (previousPort === undefined) delete process.env.PORT;
+    else process.env.PORT = previousPort;
+  }
+}
+
+function listeningBase(candidate) {
+  const address = candidate?.address?.();
+  const port = typeof address === 'object' ? Number(address.port) : 0;
+  if (!Number.isInteger(port) || port <= 0) {
+    throw new Error('音乐服务没有返回有效监听端口');
+  }
+  return `http://${DEFAULT_HOST}:${port}`;
 }
 
 async function start(settings = {}) {
@@ -98,36 +106,25 @@ async function start(settings = {}) {
   try {
     // 只加载 Loom 实际调用的模块，避免把第三方包的文件上传、云盘等整套路由暴露在本机端口。
     const { serveNcmApi } = require('NeteaseCloudMusicApi/server');
-    const app = await serveNcmApi({
+    const app = await startOnEphemeralPort(serveNcmApi, {
       host: DEFAULT_HOST,
-      port: DEFAULT_PORT,
       checkVersion: false,
       moduleDefs: musicModuleDefinitions(),
     });
     candidate = app?.server;
     if (!candidate) throw new Error('音乐服务没有返回可管理的服务器实例');
     await waitForListening(candidate);
+    const base = listeningBase(candidate);
     server = candidate;
     status = {
       ready: true,
       embedded: true,
-      base: DEFAULT_BASE,
+      base,
       error: '',
     };
   } catch (error) {
     if (candidate && !candidate.listening) candidate.close();
-    if (error?.code === 'EADDRINUSE' && await probeExistingService(DEFAULT_BASE)) {
-      status = {
-        ready: true,
-        embedded: true,
-        base: DEFAULT_BASE,
-        error: '',
-      };
-      return { ...status };
-    }
-    const detail = error?.code === 'EADDRINUSE'
-      ? `${DEFAULT_BASE} 端口已被占用`
-      : String(error?.message || error || '未知错误');
+    const detail = String(error?.message || error || '未知错误');
     status = {
       ready: false,
       embedded: true,
@@ -157,7 +154,6 @@ module.exports = {
   normaliseBase,
   musicModuleDefinitions,
   shouldEmbed,
-  probeExistingService,
   start,
   getStatus,
   stop,
@@ -176,13 +172,13 @@ if (process.env.WORKBENCH_MUSIC_SERVICE_SELF_TEST === '1') {
     assert.equal(definitions.some((definition) => definition.route === '/cloud'), false);
     assert.equal(Object.keys(require.cache).some((file) => file.includes(`${path.sep}music-metadata${path.sep}`)), false);
 
-    const probeServer = http.createServer((_request, response) => response.writeHead(204).end());
-    probeServer.listen({ host: DEFAULT_HOST, port: 0 });
-    await waitForListening(probeServer);
-    const port = probeServer.address().port;
-    assert.equal(await probeExistingService(`http://${DEFAULT_HOST}:${port}`), true);
-    await new Promise((resolve) => probeServer.close(resolve));
-    assert.equal(await probeExistingService(`http://${DEFAULT_HOST}:${port}`), false);
+    const embedded = await start({ netease: { apiBase: DEFAULT_BASE } });
+    assert.equal(embedded.ready, true);
+    assert.equal(embedded.embedded, true);
+    assert.match(embedded.base, /^http:\/\/127\.0\.0\.1:\d+$/);
+    assert.notEqual(embedded.base, DEFAULT_BASE);
+    assert.equal((await fetch(embedded.base)).status, 200);
+    await stop();
 
     const result = await start({ netease: { apiBase: 'https://music.example.test' } });
     assert.equal(result.embedded, false);

@@ -16127,26 +16127,19 @@ button:disabled {
   }
 }
 
-/* 发现页是音乐总览：桌面端始终在一个工作区内展示，搜索和歌单页仍可各自滚动。 */
+/* 发现页的内容尺寸由卡片比例决定；窗口变高时保留空白或由内容区滚动，不能拉长插画。 */
 @media (min-width: 621px) {
   .content:has(.music-page .music-discover-view) {
-    overflow: hidden;
-    overscroll-behavior: none;
+    overflow: auto;
+    overscroll-behavior: auto;
   }
 
   .music-page:has(.music-discover-view) {
     --music-player-height: 72px;
-    height: 100%;
-    min-height: 0;
+    min-height: 100%;
     padding-top: 18px;
     padding-bottom: calc(var(--music-player-height) + 24px);
-    overflow: hidden;
-  }
-
-  .music-page:has(.music-discover-view) .music-shell {
-    display: grid;
-    grid-template-rows: auto minmax(0, 1fr);
-    height: 100%;
+    overflow: visible;
   }
 
   .music-page:has(.music-discover-view) .music-topbar {
@@ -16154,17 +16147,7 @@ button:disabled {
   }
 
   .music-page:has(.music-discover-view) .music-view {
-    display: flex;
-    height: 100%;
-    min-height: 0;
     padding-top: 12px;
-  }
-
-  .music-page:has(.music-discover-view) .music-discover-view {
-    display: flex;
-    flex: 1;
-    flex-direction: column;
-    min-height: 0;
   }
 
   .music-page:has(.music-discover-view) .music-featured-card,
@@ -16206,29 +16189,16 @@ button:disabled {
   }
 
   .music-page:has(.music-discover-view) .music-mood-section {
-    display: grid;
-    flex: 1;
-    grid-template-rows: auto minmax(0, 1fr);
-    min-height: 0;
     margin-top: 16px;
   }
 
   .music-page:has(.music-discover-view) .music-discover-feature-grid {
-    height: 100%;
-    min-height: 0;
     margin-top: 8px;
   }
 
-  .music-page:has(.music-discover-view) .music-discover-feature-grid .music-feature-card {
-    display: grid;
-    grid-template-rows: minmax(0, 1fr) auto;
-    min-height: 0;
-  }
-
   .music-page:has(.music-discover-view) .music-discover-feature-grid .music-feature-art {
-    height: 100%;
-    min-height: 0;
-    aspect-ratio: auto;
+    height: auto;
+    aspect-ratio: 17 / 25;
   }
 
   .music-page:has(.music-discover-view) .music-discover-feature-grid .music-feature-copy {
@@ -16262,7 +16232,10 @@ button:disabled {
     margin-top: 10px;
   }
 
-  .music-page:has(.music-discover-view) .music-discover-feature-grid .music-feature-art { height: 100%; }
+  .music-page:has(.music-discover-view) .music-discover-feature-grid .music-feature-art {
+    height: auto;
+    aspect-ratio: 17 / 25;
+  }
 }
 
 /* Discover desktop: a quieter listening desk with paper-like surfaces and image-led hierarchy. */
