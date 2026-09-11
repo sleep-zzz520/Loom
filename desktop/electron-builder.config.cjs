@@ -34,7 +34,9 @@ module.exports = {
   win: {
     target: [{ target: 'nsis', arch: ['x64'] }],
     artifactName: '${productName}-Setup-${version}-${arch}.${ext}',
-    publish: isRelease ? [{ provider: 'generic', url: releaseUpdateUrl }] : null,
+    // GitHub Release 的实际文件服务不接受 multipart Range（会返回 501）。
+    // 关闭多段请求后，更新器会顺序请求差分块，避免退回完整安装包下载。
+    publish: isRelease ? [{ provider: 'generic', url: releaseUpdateUrl, useMultipleRangeRequest: false }] : null,
   },
   nsis: {
     oneClick: false,

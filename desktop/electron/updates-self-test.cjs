@@ -1,6 +1,6 @@
 const assert = require('node:assert/strict');
 const { EventEmitter } = require('node:events');
-const { createUpdateService, releaseNotes } = require('./updates.cjs');
+const { createUpdateService, downloadProgressMessage, releaseNotes } = require('./updates.cjs');
 
 class FakeUpdater extends EventEmitter {
   async checkForUpdates() {
@@ -8,8 +8,8 @@ class FakeUpdater extends EventEmitter {
     this.emit('update-available', { version: '0.2.0', releaseNotes: '<b>歌单封面修复</b>' });
   }
 
-  async downloadUpdate() {
-    this.emit('download-progress', { percent: 42.4 });
+  async downloadUpdate(cancellationToken) {
+    this.emit('download-progress', { percent: 42.4, transferred: 3 * 1024 * 1024, total: 12 * 1024 * 1024, bytesPerSecond: 1024 * 1024 });
     this.emit('update-downloaded', { version: '0.2.0' });
   }
 
@@ -37,9 +37,33 @@ async function run() {
   assert.equal(service.status().releaseNotes, '歌单封面修复');
   assert.equal((await service.download()).state, 'downloaded');
   assert.equal(service.status().downloadPercent, 100);
+  assert.equal(service.status().canCancel, false);
   assert.equal(service.install().state, 'installing');
   assert.equal(updater.installCalled, true);
-  assert.equal(events.some((status) => status.state === 'downloading' && status.downloadPercent === 42), true);
+  assert.equal(events.some((status) => status.state === 'downloading' && status.downloadPercent === 42 && status.message.includes('3.0 MB / 12 MB · 1.0 MB/s')), true);
+  assert.equal(downloadProgressMessage({ transferred: 0, total: 0, bytesPerSecond: 0 }), '正在下载更新… 0 B / 0 B · 0 B/s');
+
+  class CancelableUpdater extends FakeUpdater {
+    async downloadUpdate(cancellationToken) {
+      this.emit('download-progress', { percent: 42.4, transferred: 3 * 1024 * 1024, total: 12 * 1024 * 1024, bytesPerSecond: 1024 * 1024 });
+      return cancellationToken.createPromise(() => {});
+    }
+  }
+  const cancelService = createUpdateService({
+    app: { isPackaged: true, getVersion: () => '0.1.0' },
+    autoUpdater: new CancelableUpdater(),
+    platform: 'win32',
+    hasUpdateConfig: () => true,
+  });
+  await cancelService.check();
+  const pendingDownload = cancelService.download();
+  assert.equal(cancelService.status().canCancel, true);
+  assert.equal(cancelService.cancel().canCancel, false);
+  assert.match(cancelService.status().message, /正在取消/);
+  await pendingDownload;
+  assert.equal(cancelService.status().state, 'available');
+  assert.equal(cancelService.status().canDownload, true);
+  assert.equal(cancelService.status().canCancel, false);
 
   const development = createUpdateService({
     app: { isPackaged: false, getVersion: () => '0.1.0' },

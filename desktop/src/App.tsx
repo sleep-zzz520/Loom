@@ -127,6 +127,7 @@ function AppUpdateToast({
   status,
   busy,
   onDownload,
+  onCancel,
   onInstall,
   onOpenSettings,
   onDismiss,
@@ -134,6 +135,7 @@ function AppUpdateToast({
   status: AppUpdateStatus;
   busy: boolean;
   onDownload: () => void;
+  onCancel: () => void;
   onInstall: () => void;
   onOpenSettings: () => void;
   onDismiss: () => void;
@@ -148,13 +150,13 @@ function AppUpdateToast({
       </div>
       <div className="app-update-toast-copy">
         <h2 id="app-update-toast-title">{readyToInstall ? '新版本已下载完成' : downloading ? '正在下载 Loom 更新' : `Loom ${status.availableVersion || '新版本'} 可以更新`}</h2>
-        <p>{readyToInstall ? '重启后会自动完成安装；本地数据不会被覆盖。' : downloading ? `已下载 ${status.downloadPercent ?? 0}%` : '下载由你确认发起，安装也会等你选择重启。'}</p>
+        <p>{readyToInstall ? '重启后会自动完成安装；本地数据不会被覆盖。' : downloading ? status.message : '下载由你确认发起，安装也会等你选择重启。'}</p>
         {downloading && <span className="app-update-toast-progress" aria-label={`下载进度 ${status.downloadPercent ?? 0}%`}><i style={{ width: `${status.downloadPercent ?? 0}%` }} /></span>}
         <div className="app-update-toast-actions">
           {readyToInstall
             ? <button type="button" className="app-update-toast-primary" onClick={onInstall} disabled={busy}>重启并更新</button>
             : downloading
-              ? <button type="button" className="app-update-toast-secondary" onClick={onOpenSettings}>查看进度</button>
+              ? <><button type="button" className="app-update-toast-secondary" onClick={onOpenSettings}>查看进度</button><button type="button" className="app-update-toast-secondary" onClick={onCancel} disabled={!status.canCancel}>取消下载</button></>
               : <button type="button" className="app-update-toast-primary" onClick={onDownload} disabled={busy}><Download size={14} />下载更新</button>}
           {!downloading && !readyToInstall && <button type="button" className="app-update-toast-secondary" onClick={onOpenSettings}>查看详情</button>}
         </div>
@@ -342,7 +344,11 @@ export default function App() {
     setActive('settings-config');
   }
 
-  async function runAppUpdateAction(action: 'download' | 'install') {
+  async function runAppUpdateAction(action: 'download' | 'cancel' | 'install') {
+    if (action === 'cancel') {
+      setAppUpdate(await window.workbench.updates.cancel());
+      return;
+    }
     setUpdateActionBusy(true);
     try {
       const next = action === 'download'
@@ -644,6 +650,7 @@ export default function App() {
           status={appUpdate}
           busy={updateActionBusy}
           onDownload={() => void runAppUpdateAction('download')}
+          onCancel={() => void runAppUpdateAction('cancel')}
           onInstall={() => void runAppUpdateAction('install')}
           onOpenSettings={openUpdateSettings}
           onDismiss={() => setUpdateToastDismissed(true)}

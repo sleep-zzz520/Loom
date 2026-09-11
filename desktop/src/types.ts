@@ -306,6 +306,7 @@ export interface AppUpdateStatus {
   message: string;
   canCheck: boolean;
   canDownload: boolean;
+  canCancel: boolean;
   canInstall: boolean;
 }
 
@@ -638,6 +639,7 @@ export interface WorkbenchApi {
     status: () => Promise<AppUpdateStatus>;
     check: () => Promise<AppUpdateStatus>;
     download: () => Promise<AppUpdateStatus>;
+    cancel: () => Promise<AppUpdateStatus>;
     install: () => Promise<AppUpdateStatus>;
     onStatus: (callback: (status: AppUpdateStatus) => void) => () => void;
   };

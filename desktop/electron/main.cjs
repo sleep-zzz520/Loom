@@ -221,6 +221,7 @@ function registerIpc() {
   ipcMain.handle('app:update-status', () => updateService?.status());
   ipcMain.handle('app:check-for-updates', () => updateService?.check());
   ipcMain.handle('app:download-update', () => updateService?.download());
+  ipcMain.handle('app:cancel-update-download', () => updateService?.cancel());
   ipcMain.handle('app:install-update', () => updateService?.install());
   ipcMain.handle('data:get', () => publicData());
   ipcMain.handle('data:get-settings', () => publicSettings(store.getSettings()));

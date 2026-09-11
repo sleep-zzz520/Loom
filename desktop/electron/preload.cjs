@@ -46,6 +46,7 @@ contextBridge.exposeInMainWorld('workbench', {
     status: () => ipcRenderer.invoke('app:update-status'),
     check: () => ipcRenderer.invoke('app:check-for-updates'),
     download: () => ipcRenderer.invoke('app:download-update'),
+    cancel: () => ipcRenderer.invoke('app:cancel-update-download'),
     install: () => ipcRenderer.invoke('app:install-update'),
     onStatus: (callback) => {
       if (typeof callback !== 'function') return () => {};

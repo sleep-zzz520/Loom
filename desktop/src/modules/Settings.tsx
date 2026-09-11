@@ -261,7 +261,11 @@ export default function Settings({ section }: SettingsProps) {
     }
   }
 
-  async function runUpdateAction(action: 'check' | 'download' | 'install') {
+  async function runUpdateAction(action: 'check' | 'download' | 'cancel' | 'install') {
+    if (action === 'cancel') {
+      setUpdateStatus(await window.workbench.updates.cancel());
+      return;
+    }
     setUpdateBusy(true);
     try {
       const next = action === 'check'
@@ -281,6 +285,7 @@ export default function Settings({ section }: SettingsProps) {
         message: `更新失败：${error instanceof Error ? error.message : '未知错误'}`,
         canCheck: true,
         canDownload: false,
+        canCancel: false,
         canInstall: false,
       }));
     } finally {
@@ -610,6 +615,7 @@ export default function Settings({ section }: SettingsProps) {
               {updateStatus?.state !== 'unavailable' && <div className="settings-update-actions">
                 {updateStatus?.canInstall ? <button type="button" className="settings-update-primary" onClick={() => void runUpdateAction('install')} disabled={updateBusy}>重启并更新</button>
                   : updateStatus?.canDownload ? <button type="button" className="settings-update-primary" onClick={() => void runUpdateAction('download')} disabled={updateBusy}>下载更新</button>
+                    : updateStatus?.canCancel ? <button type="button" className="settings-update-secondary" onClick={() => void runUpdateAction('cancel')}>取消下载</button>
                     : <button type="button" className="settings-update-secondary" onClick={() => void runUpdateAction('check')} disabled={updateBusy || !updateStatus?.canCheck}>检查更新</button>}
               </div>}
             </div>
