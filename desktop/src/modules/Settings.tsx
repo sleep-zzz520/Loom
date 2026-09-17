@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type ChangeEvent } from 'react';
 import type { SettingsKey } from '../App';
-import type { AppSettings, AppUpdateStatus, BackupRecord, NotificationHistoryItem } from '../types';
+import type { AgentModelProfile, AppSettings, AppUpdateStatus, BackupRecord, NotificationHistoryItem } from '../types';
 import { TimeField } from '../components/DateFields';
 import { AVATAR_ACCEPT, avatarUploadError } from './profileAvatar';
 
@@ -9,6 +9,7 @@ type SettingsProps = {
 };
 
 type SettingsSaveState = 'saved' | 'saving' | 'error';
+type SettingsConfigPane = 'agent' | 'models' | 'music' | 'recovery' | 'updates';
 
 const SAVE_STATE_LABEL: Record<SettingsSaveState, string> = {
   saved: '已自动保存',
@@ -42,6 +43,14 @@ const AGENT_PROACTIVE_STYLE_OPTIONS: Array<{ value: AppSettings['agent']['person
   { value: 'companion', label: '陪伴跟进', hint: '更关心进展' },
 ];
 
+const SETTINGS_CONFIG_PANES: Array<{ id: SettingsConfigPane; label: string }> = [
+  { id: 'agent', label: 'Agent' },
+  { id: 'models', label: '模型服务' },
+  { id: 'music', label: '音乐服务' },
+  { id: 'recovery', label: '数据与恢复' },
+  { id: 'updates', label: '应用更新' },
+];
+
 export default function Settings({ section }: SettingsProps) {
   const pageMeta = SETTINGS_PAGE_META[section];
   const [settings, setSettingsState] = useState<AppSettings | null>(null);
@@ -56,6 +65,8 @@ export default function Settings({ section }: SettingsProps) {
   const [backupMessage, setBackupMessage] = useState('');
   const [updateStatus, setUpdateStatus] = useState<AppUpdateStatus | null>(null);
   const [updateBusy, setUpdateBusy] = useState(false);
+  const [configPane, setConfigPane] = useState<SettingsConfigPane>('models');
+  const [selectedAgentModelProfileId, setSelectedAgentModelProfileId] = useState('');
 
   useEffect(() => {
     Promise.all([
@@ -128,6 +139,24 @@ export default function Settings({ section }: SettingsProps) {
     );
   }
 
+  // 开发环境的渲染器可先热更新、主进程随后才重启；旧主进程返回单模型数据时，
+  // 先在界面中映射为一条默认档案，避免 Settings 因读取不存在的数组而白屏。
+  const visibleAgentModelProfiles: AgentModelProfile[] = Array.isArray(settings.agent.modelProfiles)
+    ? settings.agent.modelProfiles
+    : (settings.agent.apiBase || settings.agent.apiKey || settings.agent.model
+      ? [{
+        id: 'legacy-default',
+        name: settings.agent.model || '默认模型',
+        apiBase: settings.agent.apiBase,
+        apiKey: settings.agent.apiKey,
+        model: settings.agent.model,
+      }]
+      : []);
+  const defaultAgentModelProfileId = settings.agent.defaultModelProfileId
+    || visibleAgentModelProfiles[0]?.id
+    || '';
+  const selectedAgentModelProfile = visibleAgentModelProfiles.find((profile) => profile.id === selectedAgentModelProfileId) || null;
+
   function update(patch: Partial<AppSettings>) {
     if (!settings) return;
     const next: AppSettings = {
@@ -143,6 +172,56 @@ export default function Settings({ section }: SettingsProps) {
     setSettingsState(next);
     saveRevisionRef.current += 1;
     setSaveState('saving');
+  }
+
+  function updateAgentModelProfile(profileId: string, patch: Partial<AgentModelProfile>) {
+    if (!settings) return;
+    const modelProfiles = visibleAgentModelProfiles.map((profile) => (
+      profile.id === profileId ? { ...profile, ...patch } : profile
+    ));
+    update({ agent: { ...settings.agent, modelProfiles } });
+  }
+
+  function addAgentModelProfile() {
+    if (!settings) return;
+    const modelProfiles = visibleAgentModelProfiles;
+    const profile: AgentModelProfile = {
+      id: globalThis.crypto?.randomUUID?.() || `model-${Date.now()}`,
+      name: `模型 ${modelProfiles.length + 1}`,
+      apiBase: '',
+      apiKey: '',
+      model: '',
+    };
+    setSelectedAgentModelProfileId(profile.id);
+    update({
+      agent: {
+        ...settings.agent,
+        modelProfiles: [...modelProfiles, profile],
+        defaultModelProfileId: defaultAgentModelProfileId || profile.id,
+      },
+    });
+  }
+
+  function removeAgentModelProfile(profileId: string) {
+    if (!settings) return;
+    const modelProfiles = visibleAgentModelProfiles.filter((profile) => profile.id !== profileId);
+    const defaultModelProfileId = defaultAgentModelProfileId === profileId
+      ? modelProfiles[0]?.id || ''
+      : defaultAgentModelProfileId;
+    if (selectedAgentModelProfileId === profileId) setSelectedAgentModelProfileId('');
+    update({
+      agent: {
+        ...settings.agent,
+        modelProfiles,
+        defaultModelProfileId,
+        ...(modelProfiles.length ? {} : { apiBase: '', apiKey: '', model: '' }),
+      },
+    });
+  }
+
+  function setDefaultAgentModelProfile(profileId: string) {
+    if (!settings || profileId === defaultAgentModelProfileId) return;
+    update({ agent: { ...settings.agent, defaultModelProfileId: profileId } });
   }
 
   function retrySave() {
@@ -597,8 +676,18 @@ export default function Settings({ section }: SettingsProps) {
           )}
           </>}
 
-          {section === 'settings-config' && <>
-          <section className="settings-subsection settings-subsection--updates" aria-labelledby="app-update-title">
+          {section === 'settings-config' && <div className={`settings-config-workspace is-${configPane}`}>
+            <nav className="settings-config-nav" aria-label="系统与 Agent 设置分类">
+              {SETTINGS_CONFIG_PANES.map((pane) => <button
+                key={pane.id}
+                type="button"
+                className={configPane === pane.id ? 'is-active' : ''}
+                aria-current={configPane === pane.id ? 'page' : undefined}
+                onClick={() => setConfigPane(pane.id)}
+              >{pane.label}</button>)}
+            </nav>
+            <div className="settings-config-panel">
+          <section hidden={configPane !== 'updates'} className="settings-subsection settings-subsection--updates" aria-labelledby="app-update-title">
             <div className="settings-subsection-head">
               <div>
                 <h3 id="app-update-title">应用更新</h3>
@@ -620,7 +709,7 @@ export default function Settings({ section }: SettingsProps) {
               </div>}
             </div>
           </section>
-          <section className="settings-subsection settings-subsection--persona" aria-labelledby="agent-persona-title">
+          <section hidden={configPane !== 'agent'} className="settings-subsection settings-subsection--persona" aria-labelledby="agent-persona-title">
             <div className="settings-subsection-head">
               <div>
                 <h3 id="agent-persona-title">身份与沟通</h3>
@@ -687,7 +776,7 @@ export default function Settings({ section }: SettingsProps) {
               />
             </label>
           </section>
-          <section className="settings-subsection settings-subsection--proactive" aria-labelledby="agent-proactive-title">
+          <section hidden={configPane !== 'agent'} className="settings-subsection settings-subsection--proactive" aria-labelledby="agent-proactive-title">
             <div className="settings-subsection-head">
               <div>
                 <h3 id="agent-proactive-title">主动发现</h3>
@@ -718,47 +807,38 @@ export default function Settings({ section }: SettingsProps) {
               <span className="settings-toggle-track" aria-hidden="true"><span /></span>
             </label>
           </section>
-          <section className="settings-subsection settings-subsection--connection" aria-labelledby="agent-service-title">
-            <div className="settings-subsection-head">
-              <div>
-                <h3 id="agent-service-title">Agent 服务</h3>
+          <section hidden={configPane !== 'models'} className="settings-subsection settings-subsection--connection settings-agent-models-panel" aria-labelledby="agent-service-title">
+            <div className="settings-subsection-head"><h3 id="agent-service-title">模型服务</h3></div>
+            <div className="settings-model-manager">
+              <div className="settings-model-list" aria-label="已保存的模型配置">
+                <div className="settings-model-list-head"><strong>模型</strong><button type="button" className="settings-model-profile-add" onClick={addAgentModelProfile}>添加</button></div>
+                <div className="settings-model-list-scroll">
+                  {visibleAgentModelProfiles.map((profile) => <button key={profile.id} type="button" className={`settings-model-list-item${selectedAgentModelProfileId === profile.id ? ' is-selected' : ''}`} onClick={() => setSelectedAgentModelProfileId(profile.id)} aria-pressed={selectedAgentModelProfileId === profile.id}>
+                    <span><strong>{profile.name || profile.model || '未命名模型'}</strong><small>{profile.model || '未设置模型'}</small></span>
+                    {profile.id === defaultAgentModelProfileId && <em>默认</em>}
+                  </button>)}
+                </div>
+              </div>
+              <div className="settings-model-editor">
+                {selectedAgentModelProfile ? <>
+                  <div className="settings-model-editor-head">
+                    <div><h4>{selectedAgentModelProfile.name || selectedAgentModelProfile.model || '未命名模型'}</h4><small>{selectedAgentModelProfile.model || '未设置模型'}</small></div>
+                    <div className="settings-model-editor-actions">
+                      {selectedAgentModelProfile.id === defaultAgentModelProfileId ? <span>默认模型</span> : <button type="button" onClick={() => setDefaultAgentModelProfile(selectedAgentModelProfile.id)}>设为默认</button>}
+                      <button type="button" className="settings-model-profile-remove" onClick={() => removeAgentModelProfile(selectedAgentModelProfile.id)}>删除</button>
+                    </div>
+                  </div>
+                  <div className="settings-agent-service-fields">
+                    <label className="field settings-agent-api-base"><span>API 地址</span><input value={selectedAgentModelProfile.apiBase} onChange={(event) => updateAgentModelProfile(selectedAgentModelProfile.id, { apiBase: event.target.value })} placeholder="https://api.deepseek.com/v1" /><small className="field-hint">切换来源后需重新输入密钥。</small></label>
+                    <label className="field settings-agent-profile-name"><span>配置名称</span><input value={selectedAgentModelProfile.name} onChange={(event) => updateAgentModelProfile(selectedAgentModelProfile.id, { name: event.target.value })} placeholder="例如：GLM 主模型" /></label>
+                    <label className="field"><span>API 密钥</span><input type="password" value={selectedAgentModelProfile.apiKey} onChange={(event) => updateAgentModelProfile(selectedAgentModelProfile.id, { apiKey: event.target.value })} placeholder="sk-..." /><small className="field-hint">已保存的密钥不会回显。</small></label>
+                    <label className="field settings-agent-model"><span>模型</span><input value={selectedAgentModelProfile.model} onChange={(event) => updateAgentModelProfile(selectedAgentModelProfile.id, { model: event.target.value })} placeholder="deepseek-chat" /></label>
+                  </div>
+                </> : <p className="settings-model-editor-empty">从左侧选择模型后再编辑。</p>}
               </div>
             </div>
-            <label className="field">
-              <span>API 地址</span>
-              <input
-                value={settings.agent.apiBase}
-                onChange={(event) =>
-                  update({ agent: { ...settings.agent, apiBase: event.target.value } })
-                }
-                placeholder="https://api.deepseek.com/v1"
-              />
-              <small className="field-hint">远程服务需使用 HTTPS；切换来源后需重新输入密钥。</small>
-            </label>
-            <label className="field">
-              <span>API 密钥</span>
-              <input
-                type="password"
-                value={settings.agent.apiKey}
-                onChange={(event) =>
-                  update({ agent: { ...settings.agent, apiKey: event.target.value } })
-                }
-                placeholder="sk-..."
-              />
-              <small className="field-hint">已保存的密钥不会回显；留空会保留现有密钥。</small>
-            </label>
-            <label className="field">
-              <span>模型</span>
-              <input
-                value={settings.agent.model}
-                onChange={(event) =>
-                  update({ agent: { ...settings.agent, model: event.target.value } })
-                }
-                placeholder="deepseek-chat"
-              />
-            </label>
           </section>
-          <details className="settings-advanced-section">
+          <details hidden={configPane !== 'music'} className="settings-advanced-section">
             <summary>
               <span className="settings-advanced-summary-copy">
                 <strong id="music-service-title">音乐服务</strong>
@@ -777,7 +857,7 @@ export default function Settings({ section }: SettingsProps) {
               </label>
             </div>
           </details>
-          <section className="settings-subsection settings-subsection--recovery" aria-labelledby="data-recovery-title">
+          <section hidden={configPane !== 'recovery'} className="settings-subsection settings-subsection--recovery" aria-labelledby="data-recovery-title">
             <div className="settings-subsection-head">
               <div>
                 <h3 id="data-recovery-title">数据与恢复</h3>
@@ -789,11 +869,18 @@ export default function Settings({ section }: SettingsProps) {
               <button type="button" className="settings-recovery-secondary" onClick={() => void exportData()} disabled={backupBusy}>导出数据</button>
             </div>
             {backupMessage && <p className="settings-recovery-message" role="status">{backupMessage}</p>}
-            {backups.length ? <div className="settings-backup-list" aria-label="可恢复的数据版本">
-              {backups.slice(0, 6).map((backup) => <div key={backup.id} className="settings-backup-item"><span><strong>{backup.reason === 'manual' ? '手动备份' : backup.reason === 'pre-restore' ? '恢复前保护' : '自动恢复点'}</strong><small>{new Date(backup.createdAt).toLocaleString('zh-CN', { hour12: false })} · {Math.max(1, Math.round(backup.size / 1024))} KB</small></span><button type="button" onClick={() => void restoreBackup(backup.id)} disabled={backupBusy}>恢复此版本</button></div>)}
-            </div> : <p className="settings-recovery-empty">暂无恢复点；保存数据后会自动创建。</p>}
+            {backups.length ? <>
+              <div className="settings-backup-list-heading">
+                <strong>可恢复版本</strong>
+                <small>恢复前会保留当前版本</small>
+              </div>
+              <div className="settings-backup-list" aria-label="可恢复的数据版本">
+                {backups.slice(0, 6).map((backup) => <div key={backup.id} className="settings-backup-item"><span><strong>{backup.reason === 'manual' ? '手动备份' : backup.reason === 'pre-restore' ? '恢复前保护' : '自动恢复点'}</strong><small>{new Date(backup.createdAt).toLocaleString('zh-CN', { hour12: false })} · {Math.max(1, Math.round(backup.size / 1024))} KB</small></span><button type="button" onClick={() => void restoreBackup(backup.id)} disabled={backupBusy}>恢复此版本</button></div>)}
+              </div>
+            </> : <p className="settings-recovery-empty">暂无恢复点；保存数据后会自动创建。</p>}
           </section>
-          </>}
+            </div>
+          </div>}
           </div>
         </section>
       </div>

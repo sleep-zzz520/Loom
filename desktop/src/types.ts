@@ -131,6 +131,14 @@ export interface AgentPersona {
   customInstructions: string;
 }
 
+export interface AgentModelProfile {
+  id: string;
+  name: string;
+  apiBase: string;
+  apiKey: string;
+  model: string;
+}
+
 export interface AppSettings {
   profile: {
     name: string;
@@ -165,9 +173,12 @@ export interface AppSettings {
     importantDates: ImportantDate[];
   };
   agent: {
+    /** 当前默认配置的兼容镜像；主进程实际从 defaultModelProfileId 解析。 */
     apiBase: string;
     apiKey: string;
     model: string;
+    modelProfiles: AgentModelProfile[];
+    defaultModelProfileId: string;
     proactiveEnabled: boolean;
     emailMonitorEnabled: boolean;
     persona: AgentPersona;

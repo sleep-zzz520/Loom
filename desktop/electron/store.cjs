@@ -11,7 +11,7 @@ const MAX_RECENT_AUTOMATIC_BACKUPS = 10;
 const DAILY_BACKUP_RETENTION_DAYS = 14;
 
 const DEFAULT_DATA = {
-  schemaVersion: 6,
+  schemaVersion: 7,
   settings: {
     profile: {
       name: '',
@@ -49,6 +49,8 @@ const DEFAULT_DATA = {
       apiBase: '',
       apiKey: '',
       model: '',
+      modelProfiles: [],
+      defaultModelProfileId: '',
       proactiveEnabled: true,
       // 邮件正文可能包含私人信息；只有用户在设置中明确开启后，才启动后台分诊并发送候选邮件摘要给 Agent 模型判断。
       emailMonitorEnabled: false,
@@ -135,7 +137,10 @@ function init(userDataDir) {
 function safeDataCopy(data) {
   const safe = clone(data);
   if (safe.settings?.email) safe.settings.email.pass = '';
-  if (safe.settings?.agent) safe.settings.agent.apiKey = '';
+  if (safe.settings?.agent) {
+    safe.settings.agent.apiKey = '';
+    for (const profile of safe.settings.agent.modelProfiles || []) profile.apiKey = '';
+  }
   if (safe.settings?.sync) safe.settings.sync.token = '';
   return safe;
 }
@@ -143,7 +148,10 @@ function safeDataCopy(data) {
 function safeSettingsCopy(settings) {
   const safe = clone(settings);
   if (safe.email) safe.email.pass = '';
-  if (safe.agent) safe.agent.apiKey = '';
+  if (safe.agent) {
+    safe.agent.apiKey = '';
+    for (const profile of safe.agent.modelProfiles || []) profile.apiKey = '';
+  }
   if (safe.sync) safe.sync.token = '';
   return safe;
 }
@@ -154,6 +162,12 @@ function sanitizeRendererSettingsPatch(patch) {
   if (safe.email && typeof safe.email === 'object') delete safe.email.pass;
   if (safe.agent && typeof safe.agent === 'object' && !(typeof safe.agent.apiKey === 'string' && safe.agent.apiKey.trim())) {
     delete safe.agent.apiKey;
+  }
+  if (Array.isArray(safe.agent?.modelProfiles)) {
+    safe.agent.modelProfiles.forEach((profile) => {
+      if (!profile || typeof profile !== 'object') return;
+      if (!(typeof profile.apiKey === 'string' && profile.apiKey.trim())) delete profile.apiKey;
+    });
   }
   if (safe.sync && typeof safe.sync === 'object') delete safe.sync.token;
   return safe;
@@ -240,10 +254,52 @@ function normalizeAgentModule(data) {
   return data;
 }
 
+/**
+ * 多模型配置存成完整服务档案。apiBase/apiKey/model 保留为默认档案的兼容镜像，
+ * 这样旧版调用链和旧备份仍可工作，而切换默认档案会立刻改变实际请求使用的模型。
+ */
+function normalizeAgentModelProfiles(agent) {
+  if (!agent || typeof agent !== 'object') return;
+  const profiles = [];
+  const seenIds = new Set();
+  const candidates = Array.isArray(agent.modelProfiles) ? agent.modelProfiles : [];
+  candidates.slice(0, 20).forEach((candidate, index) => {
+    if (!candidate || typeof candidate !== 'object') return;
+    const id = String(candidate.id || `model-${index + 1}`).trim().slice(0, 80);
+    if (!id || seenIds.has(id)) return;
+    seenIds.add(id);
+    const model = String(candidate.model || '').trim().slice(0, 160);
+    profiles.push({
+      id,
+      name: String(candidate.name || model || `模型 ${profiles.length + 1}`).trim().slice(0, 80),
+      apiBase: String(candidate.apiBase || '').trim().slice(0, 500),
+      apiKey: String(candidate.apiKey || ''),
+      model,
+    });
+  });
+  if (!profiles.length && (agent.apiBase || agent.apiKey || agent.model)) {
+    profiles.push({
+      id: 'legacy-default',
+      name: String(agent.model || '默认模型').trim().slice(0, 80),
+      apiBase: String(agent.apiBase || '').trim().slice(0, 500),
+      apiKey: String(agent.apiKey || ''),
+      model: String(agent.model || '').trim().slice(0, 160),
+    });
+  }
+  agent.modelProfiles = profiles;
+  const requestedDefaultId = String(agent.defaultModelProfileId || '').trim();
+  const defaultProfile = profiles.find((profile) => profile.id === requestedDefaultId) || profiles[0] || null;
+  agent.defaultModelProfileId = defaultProfile?.id || '';
+  agent.apiBase = defaultProfile?.apiBase || '';
+  agent.apiKey = defaultProfile?.apiKey || '';
+  agent.model = defaultProfile?.model || '';
+}
+
 /** 保留旧版“工作偏好”，并把它们以已审核记忆的形式暴露给新的记忆系统。 */
 function normalizeData(data) {
   data.schemaVersion = Math.max(Number(data.schemaVersion) || 0, DEFAULT_DATA.schemaVersion);
   normalizeAgentModule(data);
+  normalizeAgentModelProfiles(data.settings?.agent);
   const preferences = Array.isArray(data.settings?.profile?.preferences) ? data.settings.profile.preferences : [];
   const memories = Array.isArray(data.modules?.agentMemories) ? data.modules.agentMemories : [];
   const known = new Set(memories.map((memory) => `${memory.kind}:${memory.content}`));
@@ -283,6 +339,7 @@ function getData() {
 function updateData(mutator) {
   const current = readData();
   const next = mutator(current) || current;
+  normalizeData(next);
   maybeWriteAutomaticBackup(current);
   writeData(next);
   return readData();
@@ -313,7 +370,13 @@ function restoreBackup(id) {
   const restored = normalizeData(mergeDeep(clone(DEFAULT_DATA), saved));
   // 备份与导出不携带密钥；恢复历史内容时也不意外覆盖当前设备上的敏感连接配置。
   restored.settings.email.pass = current.settings.email.pass;
-  restored.settings.agent.apiKey = current.settings.agent.apiKey;
+  const currentProfilesById = new Map((current.settings.agent.modelProfiles || []).map((profile) => [profile.id, profile]));
+  for (const profile of restored.settings.agent.modelProfiles || []) {
+    const currentProfile = currentProfilesById.get(profile.id);
+    // 仅当同一配置标识且服务来源未变时保留密钥，避免恢复后把密钥发送给新地址。
+    if (currentProfile && currentProfile.apiBase === profile.apiBase) profile.apiKey = currentProfile.apiKey;
+  }
+  normalizeAgentModelProfiles(restored.settings.agent);
   restored.settings.sync.token = current.settings.sync.token;
   writeData(restored);
   return { restoredAt: new Date().toISOString(), backup: listBackups().find((item) => item.id === target.id) || null };
@@ -347,6 +410,17 @@ function normaliseAvatarDataUrl(value) {
 function setSettings(patch) {
   return updateData((data) => {
     data.settings = mergeDeep(data.settings, patch);
+    const agentPatch = patch?.agent;
+    const legacyAgentFields = ['apiBase', 'apiKey', 'model'].filter((field) => Object.hasOwn(agentPatch || {}, field));
+    // 兼容仍通过旧字段写入的内部调用：把它们同步到当前默认模型档案，避免静默写到无效镜像。
+    if (agentPatch && !Array.isArray(agentPatch.modelProfiles) && legacyAgentFields.length && data.settings.agent.modelProfiles?.length) {
+      const defaultId = data.settings.agent.defaultModelProfileId || data.settings.agent.modelProfiles[0].id;
+      data.settings.agent.modelProfiles = data.settings.agent.modelProfiles.map((profile) => (
+        profile.id === defaultId
+          ? { ...profile, ...Object.fromEntries(legacyAgentFields.map((field) => [field, agentPatch[field]])) }
+          : profile
+      ));
+    }
     data.settings.profile.avatarDataUrl = normaliseAvatarDataUrl(data.settings?.profile?.avatarDataUrl);
   }).settings;
 }
@@ -392,7 +466,14 @@ if (process.env.WORKBENCH_STORE_SELF_TEST === '1') {
   try {
     fs.writeFileSync(path.join(dir, 'workbench-data.json'), JSON.stringify({
       modules: { agent: [{ role: 'user', content: '保留这条旧消息' }] },
-      settings: { profile: { preferences: ['旧版工作偏好'] } },
+      settings: {
+        profile: { preferences: ['旧版工作偏好'] },
+        agent: {
+          apiBase: 'https://legacy.example.com/v1',
+          apiKey: 'legacy-agent-secret',
+          model: 'legacy-model',
+        },
+      },
     }), 'utf8');
     init(dir);
     const migrated = getModule('agent');
@@ -407,11 +488,16 @@ if (process.env.WORKBENCH_STORE_SELF_TEST === '1') {
       proactiveStyle: 'balanced',
       customInstructions: '',
     });
+    assert.equal(getSettings().agent.modelProfiles.length, 1);
+    assert.equal(getSettings().agent.modelProfiles[0].id, 'legacy-default');
+    assert.equal(getSettings().agent.defaultModelProfileId, 'legacy-default');
+    assert.equal(getSettings().agent.model, 'legacy-model');
     assert.equal(setSettings({ profile: { avatarDataUrl: 'data:image/png;base64,iVBORw0KGgo=' } }).profile.avatarDataUrl, 'data:image/png;base64,iVBORw0KGgo=');
     assert.equal(setSettings({ profile: { avatarDataUrl: 'data:image/gif;base64,AA==' } }).profile.avatarDataUrl, '');
     assert.equal(setSettings({ profile: { avatarDataUrl: 'data:image/png;base64,AA==' } }).profile.avatarDataUrl, '');
     assert.equal(getModule('agentMemories').find((memory) => memory.content === '旧版工作偏好')?.status, 'active');
     setSettings({ agent: { apiKey: 'store-self-test-secret' } });
+    assert.equal(getSettings().agent.modelProfiles[0].apiKey, 'store-self-test-secret');
     const publicSettings = safeSettingsCopy(getSettings());
     assert.equal(publicSettings.agent.apiKey, '');
     const sanitizedEmptySecret = sanitizeRendererSettingsPatch({
@@ -423,15 +509,39 @@ if (process.env.WORKBENCH_STORE_SELF_TEST === '1') {
     assert.equal(Object.hasOwn(sanitizedEmptySecret.agent, 'apiKey'), false);
     assert.equal(Object.hasOwn(sanitizedEmptySecret.sync, 'token'), false);
     assert.equal(sanitizeRendererSettingsPatch({ agent: { apiKey: 'replacement-secret' } }).agent.apiKey, 'replacement-secret');
+    const profiles = [{
+      id: 'primary',
+      name: '主模型',
+      apiBase: 'https://api.example.com/v1',
+      apiKey: 'primary-profile-secret',
+      model: 'primary-model',
+    }, {
+      id: 'backup',
+      name: '备用模型',
+      apiBase: 'https://backup.example.com/v1',
+      apiKey: 'backup-profile-secret',
+      model: 'backup-model',
+    }];
+    const multiModelSettings = setSettings({ agent: { modelProfiles: profiles, defaultModelProfileId: 'backup' } });
+    assert.equal(multiModelSettings.agent.model, 'backup-model');
+    assert.equal(multiModelSettings.agent.apiKey, 'backup-profile-secret');
+    const publicMultiModelSettings = safeSettingsCopy(multiModelSettings);
+    assert.equal(publicMultiModelSettings.agent.modelProfiles[0].apiKey, '');
+    assert.equal(publicMultiModelSettings.agent.modelProfiles[1].apiKey, '');
+    const sanitizedProfiles = sanitizeRendererSettingsPatch({ agent: { modelProfiles: publicMultiModelSettings.agent.modelProfiles } });
+    assert.equal(Object.hasOwn(sanitizedProfiles.agent.modelProfiles[0], 'apiKey'), false);
     const backup = createBackup();
     assert.ok(backup?.id);
     const backupText = fs.readFileSync(path.join(dir, 'backups', backup.id), 'utf8');
     assert.ok(!backupText.includes('store-self-test-secret'));
+    assert.ok(!backupText.includes('primary-profile-secret'));
+    assert.ok(!backupText.includes('backup-profile-secret'));
     setModule('notes', [{ id: 'after-backup', title: '恢复前的变化', content: '', updatedAt: '' }]);
     const restored = restoreBackup(backup.id);
     assert.ok(restored.restoredAt);
     assert.equal(getModule('notes').length, 0);
-    assert.equal(getSettings().agent.apiKey, 'store-self-test-secret');
+    assert.equal(getSettings().agent.apiKey, 'backup-profile-secret');
+    assert.equal(getSettings().agent.modelProfiles.find((profile) => profile.id === 'primary')?.apiKey, 'primary-profile-secret');
     console.log('store self-test ok');
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });

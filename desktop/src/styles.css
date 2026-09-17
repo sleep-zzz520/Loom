@@ -6802,6 +6802,117 @@ button:disabled {
   animation: settings-section-in 220ms ease-out both;
 }
 
+/* “系统与 Agent”内容较多，保留页面标题，让设置内容在自己的工作区内滚动。 */
+.content:has(.settings-grid--settings-config) {
+  overflow: hidden;
+}
+
+.module-page:has(.settings-grid--settings-config) {
+  min-height: 0;
+  height: 100%;
+}
+
+.settings-grid--settings-config {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  height: 100%;
+  padding-bottom: clamp(24px, 3vh, 40px);
+  overflow: hidden;
+}
+
+.settings-grid--settings-config .settings-section {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  flex: 1;
+  min-height: 0;
+}
+
+.settings-section-content--settings-config {
+  display: flex;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.settings-config-workspace {
+  display: grid;
+  grid-template-columns: 154px minmax(0, 1fr);
+  width: 100%;
+  min-height: 0;
+  height: 100%;
+  gap: 28px;
+}
+
+.settings-config-nav {
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+  gap: 3px;
+  padding-right: 18px;
+  overflow-y: auto;
+  border-right: 1px solid #e5eaf1;
+}
+
+.settings-config-nav button {
+  width: 100%;
+  min-height: 34px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #66758b;
+  cursor: pointer;
+  font-size: 12.5px;
+  font-weight: 520;
+  text-align: left;
+  transition: background-color var(--transition), color var(--transition), transform var(--transition);
+}
+
+.settings-config-nav button:hover {
+  color: #425a87;
+  background: #eef3fb;
+}
+
+.settings-config-nav button.is-active {
+  color: #405f9d;
+  background: #eaf0fb;
+  font-weight: 650;
+}
+
+.settings-config-nav button:active {
+  transform: translateY(1px);
+}
+
+.settings-config-nav button:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(94, 126, 194, 0.13);
+}
+
+.settings-config-panel {
+  min-width: 0;
+  min-height: 0;
+  padding: 0 12px 24px 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+.settings-config-panel > [hidden] {
+  display: none;
+}
+
+.settings-config-panel > .settings-subsection + .settings-subsection {
+  margin-top: 40px;
+  padding-top: 34px;
+  border-top: 1px solid #e5eaf1;
+}
+
+.settings-config-workspace.is-models .settings-config-panel {
+  display: flex;
+  padding-bottom: 0;
+  overflow: hidden;
+}
+
 @keyframes settings-section-in {
   from { opacity: 0; transform: translateY(6px); }
   to { opacity: 1; transform: translateY(0); }
@@ -6814,7 +6925,9 @@ button:disabled {
   padding: 0;
 }
 
-.settings-subsection + .settings-subsection {
+.settings-section-content > .settings-subsection + .settings-subsection,
+.settings-section-content > .settings-subsection + .settings-advanced-section,
+.settings-section-content > .settings-advanced-section + .settings-subsection {
   margin-top: 40px;
   padding-top: 34px;
   border-top: 1px solid #e5eaf1;
@@ -6923,9 +7036,299 @@ button:disabled {
 
 .field-hint {
   display: block;
-  color: #a0a9b7;
+  color: #647287;
   font-size: 11.5px;
   line-height: 1.5;
+}
+
+.settings-agent-service-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 20px 16px;
+}
+
+.settings-agent-api-base {
+  grid-column: 1 / -1;
+}
+
+.settings-agent-profile-name {
+  grid-column: 1 / -1;
+}
+
+.settings-agent-models-panel {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  flex: 1;
+  min-height: 0;
+}
+
+.settings-model-manager {
+  display: grid;
+  min-height: 0;
+  grid-template-columns: minmax(164px, 0.38fr) minmax(0, 1fr);
+  border-top: 1px solid #e5eaf1;
+}
+
+.settings-model-list {
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+  padding: 16px 16px 16px 0;
+  border-right: 1px solid #e5eaf1;
+}
+
+.settings-model-list-head {
+  display: flex;
+  min-height: 32px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 0 4px 10px;
+}
+
+.settings-model-list-head strong {
+  color: #536178;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.settings-model-list-scroll {
+  display: grid;
+  flex: 1;
+  min-height: 0;
+  align-content: start;
+  gap: 3px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.settings-model-list-item {
+  display: flex;
+  width: 100%;
+  min-height: 54px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 9px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: #46546a;
+  cursor: pointer;
+  text-align: left;
+  transition: background-color var(--transition), color var(--transition), transform var(--transition);
+}
+
+.settings-model-list-item:hover {
+  background: #f0f4fa;
+}
+
+.settings-model-list-item.is-selected {
+  background: #eaf0fb;
+  color: #405f9d;
+}
+
+.settings-model-list-item:active {
+  transform: translateY(1px);
+}
+
+.settings-model-list-item:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(94, 126, 194, 0.13);
+}
+
+.settings-model-list-item > span {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.settings-model-list-item strong,
+.settings-model-list-item small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-model-list-item strong {
+  color: inherit;
+  font-size: 12px;
+  font-weight: 620;
+}
+
+.settings-model-list-item small {
+  color: #8290a4;
+  font-size: 10.5px;
+}
+
+.settings-model-list-item em,
+.settings-model-editor-actions > span {
+  flex: none;
+  color: #5472ab;
+  font-size: 10.5px;
+  font-style: normal;
+  font-weight: 650;
+}
+
+.settings-model-editor {
+  min-width: 0;
+  min-height: 0;
+  padding: 18px 0 22px 24px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.settings-model-editor-head {
+  display: flex;
+  min-height: 34px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 22px;
+}
+
+.settings-model-editor-head h4 {
+  margin: 0;
+  color: #354158;
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.settings-model-editor-head small {
+  display: block;
+  margin-top: 3px;
+  color: #8290a4;
+  font-size: 11px;
+}
+
+.settings-model-editor-actions {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 10px;
+}
+
+.settings-model-editor-actions > button {
+  min-height: 30px;
+  padding: 0 7px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: #526d9f;
+  cursor: pointer;
+  font-size: 11.5px;
+  font-weight: 600;
+}
+
+.settings-model-editor-actions > button:hover {
+  background: #eef3fb;
+}
+
+.settings-model-editor-empty {
+  display: grid;
+  min-height: 100%;
+  place-items: center;
+  margin: 0;
+  color: #7e8b9d;
+  font-size: 12px;
+}
+
+.settings-model-profile-list {
+  display: grid;
+}
+
+.settings-model-profile {
+  min-width: 0;
+  padding: 21px 0 23px;
+  border-top: 1px solid #e4e9f1;
+}
+
+.settings-model-profile:first-child {
+  padding-top: 0;
+  border-top: 0;
+}
+
+.settings-model-profile-head {
+  display: flex;
+  min-height: 28px;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 18px;
+}
+
+.settings-model-profile-head > div:first-child {
+  display: grid;
+  gap: 2px;
+  margin-right: auto;
+}
+
+.settings-model-profile-head strong {
+  color: #354158;
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.settings-model-profile-head small {
+  color: #8290a5;
+  font-size: 11.5px;
+}
+
+.settings-model-profile-default {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #53647c;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.settings-model-profile-default input {
+  width: 15px;
+  height: 15px;
+  margin: 0;
+  accent-color: #5876ba;
+}
+
+.settings-model-profile-remove,
+.settings-model-profile-add {
+  min-height: 32px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: #64738a;
+  font-size: 12px;
+  font-weight: 550;
+  cursor: pointer;
+}
+
+.settings-model-profile-remove {
+  padding: 0 6px;
+}
+
+.settings-model-profile-remove:hover {
+  color: #b14d58;
+  background: #fff4f4;
+}
+
+.settings-model-profile-add {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 11px;
+  border: 1px solid #d6deeb;
+  color: #4f6faa;
+  background: #f8faff;
+}
+
+.settings-model-profile-add:hover {
+  border-color: #b9c9e2;
+  background: #f1f5fc;
+}
+
+.settings-model-profile-empty {
+  margin: 0 0 15px;
+  color: #758399;
+  font-size: 12px;
+  line-height: 1.6;
 }
 
 .settings-profile-identity {
@@ -7364,23 +7767,49 @@ button:disabled {
 
 .settings-advanced-section {
   margin: 0;
-  border: 1px solid #dde5f0;
-  border-radius: 12px;
-  background: #fafcff;
+  padding: 0;
+  border: 0;
+  background: transparent;
 }
 
 .settings-advanced-section > summary {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 18px;
-  padding: 16px 18px;
+  min-height: 42px;
+  gap: 10px;
+  padding: 0 2px;
   color: #30384a;
   cursor: pointer;
   list-style: none;
 }
 
 .settings-advanced-section > summary::-webkit-details-marker { display: none; }
+
+.settings-advanced-section > summary::after {
+  width: 7px;
+  height: 7px;
+  margin-left: 2px;
+  border-right: 1.5px solid #708097;
+  border-bottom: 1.5px solid #708097;
+  content: '';
+  transform: rotate(45deg) translateY(-2px);
+  transition: transform var(--transition), border-color var(--transition);
+}
+
+.settings-advanced-section[open] > summary::after {
+  transform: rotate(225deg) translate(-2px, -2px);
+}
+
+.settings-advanced-section > summary:hover {
+  color: #4f6faa;
+}
+
+.settings-advanced-section > summary:focus-visible {
+  outline: none;
+  border-radius: 10px;
+  box-shadow: 0 0 0 3px rgba(94, 126, 194, 0.15);
+}
 
 .settings-advanced-summary-copy {
   display: grid;
@@ -7394,20 +7823,18 @@ button:disabled {
 
 .settings-advanced-label {
   flex: none;
-  padding: 3px 7px;
-  color: #607da9;
-  border-radius: 999px;
-  background: #edf3fb;
+  margin-left: auto;
+  color: #718098;
   font-size: 10.5px;
-  font-weight: 600;
+  font-weight: 500;
 }
 
 .settings-advanced-content {
-  padding: 0 18px 18px;
+  padding: 14px 0 0;
   border-top: 1px solid #e5ebf3;
 }
 
-.settings-advanced-content .field { margin-top: 16px; }
+.settings-advanced-content .field { margin: 0; }
 
 @media (max-width: 760px) {
   .settings-grid {
@@ -7418,6 +7845,14 @@ button:disabled {
     flex-direction: column;
     gap: 14px;
     margin-bottom: 40px;
+  }
+
+  .settings-agent-service-fields {
+    grid-template-columns: 1fr;
+  }
+
+  .settings-agent-api-base {
+    grid-column: auto;
   }
 
   .settings-save-state {
@@ -12243,12 +12678,15 @@ button:disabled {
 .settings-recovery-secondary:disabled,
 .settings-backup-item button:disabled { cursor: wait; opacity: .55; }
 .settings-recovery-message,
-.settings-recovery-empty { margin: 11px 0 0; color: #7f8996; font-size: 12px; line-height: 1.55; }
-.settings-backup-list { display: grid; margin-top: 13px; border-top: 1px solid rgba(72, 80, 96, .075); }
+.settings-recovery-empty { margin: 11px 0 0; color: #647287; font-size: 12px; line-height: 1.55; }
+.settings-backup-list-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; margin-top: 20px; }
+.settings-backup-list-heading strong { color: #535d6c; font-size: 12px; font-weight: 680; }
+.settings-backup-list-heading small { color: #647287; font-size: 11px; }
+.settings-backup-list { display: grid; margin-top: 7px; border-top: 1px solid rgba(72, 80, 96, .075); }
 .settings-backup-item { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-height: 52px; padding: 8px 0; border-bottom: 1px solid rgba(72, 80, 96, .075); }
 .settings-backup-item > span { display: grid; min-width: 0; gap: 2px; }
 .settings-backup-item strong { color: #535d6c; font-size: 12px; font-weight: 680; }
-.settings-backup-item small { color: #929aa6; font-size: 11px; }
+.settings-backup-item small { color: #647287; font-size: 11px; }
 .settings-backup-item button { flex: 0 0 auto; min-height: 29px; padding-inline: 9px; font-size: 11px; }
 
 @media (max-width: 560px) {
@@ -16127,19 +16565,27 @@ button:disabled {
   }
 }
 
-/* 发现页的内容尺寸由卡片比例决定；窗口变高时保留空白或由内容区滚动，不能拉长插画。 */
+/* 桌面端发现页是固定工作区：播放器以外的内容始终收在一屏内。 */
 @media (min-width: 621px) {
   .content:has(.music-page .music-discover-view) {
-    overflow: auto;
-    overscroll-behavior: auto;
+    overflow: hidden;
+    overscroll-behavior: none;
   }
 
   .music-page:has(.music-discover-view) {
     --music-player-height: 72px;
-    min-height: 100%;
-    padding-top: 18px;
-    padding-bottom: calc(var(--music-player-height) + 24px);
-    overflow: visible;
+    height: 100%;
+    min-height: 0;
+    padding-top: 14px;
+    padding-bottom: var(--music-player-height);
+    overflow: hidden;
+  }
+
+  .music-page:has(.music-discover-view) .music-shell {
+    display: grid;
+    grid-template-rows: auto minmax(0, 1fr);
+    height: 100%;
+    min-height: 0;
   }
 
   .music-page:has(.music-discover-view) .music-topbar {
@@ -16147,94 +16593,86 @@ button:disabled {
   }
 
   .music-page:has(.music-discover-view) .music-view {
-    padding-top: 12px;
+    height: 100%;
+    min-height: 0;
+    padding-top: 10px;
+    overflow: hidden;
+  }
+
+  .music-page:has(.music-discover-view) .music-discover-view {
+    display: grid;
+    grid-template-rows: auto clamp(120px, 19vh, 154px) auto minmax(0, 1fr);
+    gap: 10px;
+    height: 100%;
+    min-height: 0;
+  }
+
+  .music-page:has(.music-discover-view) .music-discover-heading,
+  .music-page:has(.music-discover-view) .music-featured-card,
+  .music-page:has(.music-discover-view) .music-quick-section,
+  .music-page:has(.music-discover-view) .music-mood-section {
+    margin: 0;
   }
 
   .music-page:has(.music-discover-view) .music-featured-card,
   .music-page:has(.music-discover-view) .music-featured-art {
-    height: clamp(152px, 22vh, 174px);
+    height: 100%;
     min-height: 0;
   }
 
-  .music-page:has(.music-discover-view) .music-featured-card {
-    margin-top: 14px;
-  }
-
   .music-page:has(.music-discover-view) .music-featured-copy {
-    padding: 20px 26px;
+    padding: 16px 26px;
   }
 
   .music-page:has(.music-discover-view) .music-featured-copy p {
-    margin-bottom: 12px;
-  }
-
-  .music-page:has(.music-discover-view) .music-quick-section {
-    margin-top: 14px;
+    margin-bottom: 8px;
   }
 
   .music-page:has(.music-discover-view) .music-quick-grid {
-    margin-top: 8px;
+    margin-top: 4px;
   }
 
   .music-page:has(.music-discover-view) .music-quick-card {
-    grid-template-columns: 54px minmax(0, 1fr) 26px;
-    min-height: 54px;
+    grid-template-columns: 48px minmax(0, 1fr) 26px;
+    min-height: 48px;
     gap: 8px;
   }
 
   .music-page:has(.music-discover-view) .music-quick-card > img,
   .music-page:has(.music-discover-view) .music-quick-cover {
-    width: 54px;
-    height: 54px;
+    width: 48px;
+    height: 48px;
   }
 
   .music-page:has(.music-discover-view) .music-mood-section {
-    margin-top: 16px;
-  }
-
-  .music-page:has(.music-discover-view) .music-discover-feature-grid {
-    margin-top: 8px;
-  }
-
-  .music-page:has(.music-discover-view) .music-discover-feature-grid .music-feature-art {
-    height: auto;
-    aspect-ratio: 17 / 25;
-  }
-
-  .music-page:has(.music-discover-view) .music-discover-feature-grid .music-feature-copy {
-    padding-top: 7px;
-  }
-}
-
-@media (min-width: 621px) and (max-height: 700px) {
-  .music-page:has(.music-discover-view) {
-    --music-player-height: 66px;
-    padding-top: 12px;
-    padding-bottom: calc(var(--music-player-height) + 12px);
-  }
-
-  .music-page:has(.music-discover-view) .music-view {
-    padding-top: 8px;
-  }
-
-  .music-page:has(.music-discover-view) .music-featured-card,
-  .music-page:has(.music-discover-view) .music-featured-art {
-    height: 126px;
+    display: grid;
+    grid-template-rows: auto minmax(0, 1fr);
     min-height: 0;
   }
 
-  .music-page:has(.music-discover-view) .music-featured-copy {
-    padding-block: 14px;
+  .music-page:has(.music-discover-view) .music-discover-feature-grid {
+    height: 100%;
+    min-height: 0;
+    margin-top: 4px;
+    padding-bottom: 12px;
   }
 
-  .music-page:has(.music-discover-view) .music-quick-section,
-  .music-page:has(.music-discover-view) .music-mood-section {
-    margin-top: 10px;
+  .music-page:has(.music-discover-view) .music-discover-feature-grid .music-feature-card {
+    display: grid;
+    grid-template-rows: minmax(0, 1fr) auto;
+    height: 100%;
+    min-height: 0;
   }
 
   .music-page:has(.music-discover-view) .music-discover-feature-grid .music-feature-art {
     height: auto;
-    aspect-ratio: 17 / 25;
+    min-height: 0;
+    aspect-ratio: auto;
+    align-self: stretch;
+  }
+
+  .music-page:has(.music-discover-view) .music-discover-feature-grid .music-feature-copy {
+    padding-top: 6px;
   }
 }
 

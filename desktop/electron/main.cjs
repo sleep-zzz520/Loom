@@ -64,7 +64,7 @@ function getMusicServiceStatus() {
 }
 
 function getAgentSettings() {
-  return secrets.withDecryptedAgentApiKey(store.getSettings());
+  return secrets.withDecryptedAgentApiKey(getMusicSettings());
 }
 
 function createWindow() {
@@ -161,7 +161,7 @@ function prepareRendererSettingsPatch(patch) {
       && security.hasServiceOriginChanged(current.netease?.apiBase, next.netease.apiBase)
   );
   return {
-    patch: secrets.protectAgentApiKeyPatch(next, { currentApiBase: current.agent?.apiBase }),
+    patch: secrets.protectAgentApiKeyPatch(next, { currentAgent: current.agent, currentApiBase: current.agent?.apiBase }),
     clearMusicSession: musicOriginChanged,
   };
 }

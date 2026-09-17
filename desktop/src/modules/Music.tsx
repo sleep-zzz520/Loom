@@ -59,6 +59,14 @@ type PlaylistActionKind = 'collect' | 'like';
 type PlaylistActionVisualState = { collected: boolean; liked: boolean };
 type PlaylistActionError = { trackId: number; action: PlaylistActionKind; message: string };
 
+function LibraryPlaylistCover({ coverUrl }: { coverUrl: string | null | undefined }) {
+  const source = coverUrl?.replace(/^http:/i, 'https:');
+  const [failedSource, setFailedSource] = useState<string>();
+  return source && source !== failedSource
+    ? <img src={source} alt="" onError={() => setFailedSource(source)} />
+    : <span className="music-playlist-cover" aria-hidden="true"><ListMusic size={15} /></span>;
+}
+
 export default function Music({
   agentCommand,
   onAgentCommandHandled,
@@ -1000,7 +1008,7 @@ export default function Music({
               <div className="music-library-playlist-list" role="region" aria-label="歌单列表" tabIndex={0}>
                 {library.playlists.length ? library.playlists.map((playlist) => (
                   <button key={playlist.id} type="button" className={`music-library-playlist${activePlaylistId === playlist.id ? ' is-active' : ''}`} onClick={() => void loadPlaylist(playlist.id)} disabled={playlistLoadingId === playlist.id} aria-current={activePlaylistId === playlist.id ? 'true' : undefined} title={playlist.name}>
-                    {playlist.coverUrl ? <img src={playlist.coverUrl} alt="" /> : <span className="music-playlist-cover"><ListMusic size={15} /></span>}
+                    <LibraryPlaylistCover coverUrl={playlist.coverUrl} />
                     <span><strong>{playlist.name}</strong><small>{playlist.trackCount} 首{playlist.isMine ? ' · 我的' : ''}</small></span>
                     {playlistLoadingId === playlist.id ? <RefreshCw size={14} className="is-spinning" aria-label="同步中" /> : <ChevronRight size={14} aria-hidden="true" />}
                   </button>

@@ -81,30 +81,39 @@ async function run(win) {
     }
     throw new Error('Music discovery cards did not render');
   });
-  const musicArtworkHeights = [];
-  for (const height of [780, 1020]) {
+  for (const height of [740, 820]) {
     win.setContentSize(1280, height);
     await new Promise((resolve) => setTimeout(resolve, 100));
     const layout = await evaluate(() => {
       const arts = [...document.querySelectorAll('.music-discover-feature-grid .music-feature-art')];
       const content = document.querySelector('.content');
+      const player = document.querySelector('.music-player');
+      const cards = [...document.querySelectorAll('.music-discover-feature-grid .music-feature-card')];
+      const playerTop = player.getBoundingClientRect().top;
+      const copyBounds = cards.map((card) => ({
+        cardBottom: card.getBoundingClientRect().bottom,
+        copyBottom: card.querySelector('.music-feature-copy').getBoundingClientRect().bottom,
+      }));
       return {
-        artSizes: arts.map((art) => {
-          const rect = art.getBoundingClientRect();
-          return { width: rect.width, height: rect.height };
-        }),
+        artHeights: arts.map((art) => art.getBoundingClientRect().height),
         contentOverflowX: content.scrollWidth > content.clientWidth,
+        contentOverflowY: content.scrollHeight > content.clientHeight + 1,
+        outerOverflowY: document.documentElement.scrollHeight > document.documentElement.clientHeight + 1,
+        cardsCoveredByPlayer: cards.some((card) => card.getBoundingClientRect().bottom > playerTop),
+        copyEscapesCard: copyBounds.some(({ cardBottom, copyBottom }) => copyBottom > cardBottom + 1),
+        copyPlayerClearance: Math.min(...copyBounds.map(({ copyBottom }) => playerTop - copyBottom)),
       };
     });
-    assert.equal(layout.artSizes.length, 4, `Music artwork count at ${height}px`);
+    assert.equal(layout.artHeights.length, 4, `Music artwork count at ${height}px`);
     assert.equal(layout.contentOverflowX, false, `Music layout horizontal overflow at ${height}px`);
-    for (const art of layout.artSizes) {
-      assert.ok(Math.abs((art.width / art.height) - (17 / 25)) < 0.015, `Music artwork ratio at ${height}px`);
-    }
-    musicArtworkHeights.push(layout.artSizes[0].height);
+    assert.equal(layout.contentOverflowY, false, `Music discovery must fit one page at ${height}px`);
+    assert.equal(layout.outerOverflowY, false, `Music discovery must not create document scrolling at ${height}px`);
+    assert.equal(layout.cardsCoveredByPlayer, false, `Music cards must stay above the player at ${height}px`);
+    assert.equal(layout.copyEscapesCard, false, `Music card text must stay inside its card at ${height}px`);
+    assert.ok(layout.copyPlayerClearance >= 12, `Music card text needs 12px of clearance above the player at ${height}px`);
+    assert.ok(layout.artHeights.every((artHeight) => artHeight > 0), `Music artwork must remain visible at ${height}px`);
   }
-  assert.ok(Math.abs(musicArtworkHeights[0] - musicArtworkHeights[1]) < 1, 'Music artwork must not stretch when only window height changes');
-  console.log('[runtime] music discovery artwork keeps its aspect ratio while the window resizes');
+  console.log('[runtime] music discovery stays in one page and above the fixed player');
 
   const initial = await evaluate(async () => ({
     title: document.title,
