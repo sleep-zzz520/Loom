@@ -3,7 +3,8 @@
 Loom 是一个本地优先、跨平台（Windows / macOS）的统一桌面工作台。当前已接入待办、日历、备忘录、邮箱、音乐、资料和 Agent 等模块；邮箱支持通用 IMAP 收信与 SMTP 发信，账户授权码通过系统安全存储保护。
 
 ## 产品宣传片
-https://github.com/sleep-zzz520/Loom/blob/main/Loom_%E4%BA%A7%E5%93%81%E5%AE%A3%E4%BC%A0%E7%89%87.mp4
+https://github.com/user-attachments/assets/c057a0ff-07ac-4ed6-a74b-7ff1864991aa
+
 
 ## 快速开始
 
