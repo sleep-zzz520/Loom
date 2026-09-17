@@ -5,6 +5,7 @@ Loom 是一个本地优先、跨平台（Windows / macOS）的统一桌面工作
 ## 产品宣传片
 
 [Loom 产品宣传片](Loom_产品宣传片.mp4)
+https://github.com/sleep-zzz520/Loom/blob/main/Loom_%E4%BA%A7%E5%93%81%E5%AE%A3%E4%BC%A0%E7%89%87.mp4
 
 ## 快速开始
 
