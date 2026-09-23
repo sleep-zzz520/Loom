@@ -16470,6 +16470,31 @@ button:disabled {
   font-size: 9.5px;
 }
 
+.agent-knowledge-edit {
+  grid-column: 2 / -1;
+  display: grid;
+  gap: 5px;
+}
+
+.agent-knowledge-edit textarea {
+  width: 100%;
+  min-height: 44px;
+  padding: 6px 7px;
+  border: 1px solid rgba(120, 140, 168, 0.35);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.72);
+  color: #4f5d6f;
+  font: inherit;
+  font-size: 10.5px;
+  line-height: 1.45;
+  resize: vertical;
+}
+
+.agent-knowledge-edit textarea:focus {
+  outline: none;
+  border-color: var(--agent-accent);
+}
+
 .agent-knowledge-item details {
   margin-top: 5px;
   color: #8793a1;

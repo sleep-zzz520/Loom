@@ -221,6 +221,18 @@ function normaliseRunContext(value) {
   return Array.isArray(value) ? value.filter((item) => allowed.has(item)) : [];
 }
 
+function normaliseRunIds(value) {
+  return Array.isArray(value) ? value.filter((item) => typeof item === 'string' && item).slice(0, 20) : [];
+}
+
+/** 预取注入的记忆与 Skill 也要体现在运行记录里，否则无法回答“这次到底用了哪几条”。 */
+function resolveRunContextTypes(result) {
+  const types = new Set(normaliseRunContext(result.contextTypes));
+  if (normaliseRunIds(result.memoryIds).length) types.add('memories');
+  if (normaliseRunIds(result.skillIds).length) types.add('skills');
+  return [...types];
+}
+
 function normaliseMailPriority(value) {
   return ['high', 'medium', 'low'].includes(value) ? value : null;
 }
@@ -451,7 +463,9 @@ async function runCheck({
       finishRun(run.id, {
         status: 'completed',
         suggestionId: suggestion.id,
-        contextTypes: normaliseRunContext(result.contextTypes),
+        contextTypes: resolveRunContextTypes(result),
+        memoryIds: normaliseRunIds(result.memoryIds),
+        skillIds: normaliseRunIds(result.skillIds),
         decision: `生成建议：${suggestion.title}`,
         delivery,
       });
@@ -459,7 +473,9 @@ async function runCheck({
       finishRun(run.id, {
         status: 'completed',
         suggestionId: null,
-        contextTypes: normaliseRunContext(result.contextTypes),
+        contextTypes: resolveRunContextTypes(result),
+        memoryIds: normaliseRunIds(result.memoryIds),
+        skillIds: normaliseRunIds(result.skillIds),
         decision: '检查完成，当前没有需要即时提醒的事项。',
         delivery: 'none',
       });
@@ -929,6 +945,22 @@ if (process.env.WORKBENCH_PROACTIVE_SELF_TEST === '1') {
       recurrenceId: null,
       createdAt: '2026-08-22T08:00:00.000Z',
     }]);
+    store.setModule('agentMemories', [{
+      id: 'memory-1',
+      content: '准备方案时先确认交付时间。',
+      kind: 'fact',
+      status: 'active',
+      source: 'self-test',
+      replacesId: null,
+      replacedById: null,
+      validUntil: null,
+      similarIds: [],
+      usageCount: 0,
+      lastUsedAt: null,
+      createdAt: '2026-08-22T08:00:00.000Z',
+      updatedAt: '2026-08-22T08:00:00.000Z',
+      reviewedAt: '2026-08-22T08:00:00.000Z',
+    }]);
     let requestCount = 0;
     const encoder = new TextEncoder();
     const streamResponse = (payload) => {
@@ -972,7 +1004,8 @@ if (process.env.WORKBENCH_PROACTIVE_SELF_TEST === '1') {
     assert.equal(deliveredAlerts[0].summary, '准备方案即将到期，建议先确认今天的完成路径。');
     assert.equal(deliveredAlerts[0].phase, 'initial');
     assert.equal(store.getModule('agentRuns')[0].status, 'completed');
-    assert.deepEqual(store.getModule('agentRuns')[0].contextTypes, ['todos']);
+    assert.deepEqual(store.getModule('agentRuns')[0].contextTypes, ['todos', 'memories']);
+    assert.deepEqual(store.getModule('agentRuns')[0].memoryIds, ['memory-1']);
     assert.equal(store.getModule('agentRuns')[0].delivery, 'desktop-notification');
     assert.equal(store.getModule('agentRuns')[0].decision, '生成建议：优先处理方案');
     const deadlineAlert = notifyTodoReminder({

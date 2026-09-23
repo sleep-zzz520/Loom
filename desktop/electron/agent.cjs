@@ -303,6 +303,7 @@ const TOOL_DEFINITIONS = [
           content: { type: 'string', description: '清晰、长期有效的记忆内容' },
           kind: { type: 'string', enum: ['preference', 'fact', 'instruction'] },
           replacesId: { type: 'string', description: '可选：将来采纳后要替换的现有长期记忆 ID' },
+          validUntil: { type: 'string', description: '可选：ISO 8601 时间。仅当用户说明该信息只在一段时间内有效时填写' },
         },
         required: ['content'],
       },
@@ -395,11 +396,15 @@ function normaliseMessages(messages) {
     .slice(-30);
 }
 
-function buildSystemPrompt(settings, contextQuery = '') {
+function buildSystemPrompt(settings, contextQuery = '', trace = null) {
   const profile = settings.profile || {};
   const persona = getPersona(settings);
   const now = new Date();
   const agentContext = agentState.promptContext(contextQuery);
+  if (trace) {
+    trace.memoryIds = [...agentContext.memoryIds];
+    trace.skillIds = [...agentContext.skillIds];
+  }
   const responseLengthInstruction = {
     concise: '回答优先简洁，先给结论，再补充必要细节。',
     balanced: '回答保持适中，先给结论，再说明关键原因和下一步。',
@@ -423,7 +428,7 @@ function buildSystemPrompt(settings, contextQuery = '') {
     '当用户要求新增待办或备忘录时，只能调用 prepare_create_todo 或 prepare_create_note。它们只会生成确认卡片，绝不能声称已经保存。若待办属于现有目标，先调用 get_goals 并在提案中填写真实的 goalId。',
     '当用户表达一个需要持续推进、有成功标准或多个后续行动的事项时，先调用 get_goals；需要新建时使用 prepare_create_goal。一次性小任务应创建待办，而不是目标。',
     '公共节假日与常见日期由系统自动识别。只有用户明确提到自己的生日、纪念日等私人日期时，才调用 prepare_save_important_date；它只会生成确认卡片，绝不能声称已经保存。',
-    '只有用户明确说“记住”“以后都按这个”“把这条作为长期规则”等，或确认一条非常稳定的长期信息值得保存时，才调用 prepare_memory_candidate。它会先进入候选记忆区，用户审核采纳后才生效；绝不能声称已经记住。prepare_save_preference 是旧版别名，也必须走同一候选审核流程。',
+    '只有用户明确说“记住”“以后都按这个”“把这条作为长期规则”等，或确认一条非常稳定的长期信息值得保存时，才调用 prepare_memory_candidate。它会先进入候选记忆区，用户审核采纳后才生效；绝不能声称已经记住。prepare_save_preference 是旧版别名，也必须走同一候选审核流程。如果用户说明这条信息只在一段时间内有效（例如“本月有效”“到 3 月底为止”），请同时填写 validUntil。',
     '只有当一个流程已经被验证、可复用且有清晰步骤时，才调用 prepare_skill_candidate。它只会创建候选 Skill，用户审核启用前不能声称 Skill 已可用，也不能自行修改已启用 Skill。',
     '当用户询问“我喜欢什么音乐”、歌单、收藏或音乐偏好时，先调用 get_music_library，再对有代表性的本人歌单调用 get_music_playlist。只能依据返回的真实歌曲、艺人、专辑和覆盖范围分析；曲目被截断时要说明样本范围，未登录或未同步时如实说明，不能要求用户重复已有歌单信息。',
     '当用户要求找歌、推荐歌曲、搜索音乐时，调用 search_music。只有用户明确要求播放、来一首或试听时，才在 search_music 后调用 play_music；可使用本轮搜索返回的歌曲 ID，或对上一轮结果使用从 1 开始的序号。音乐工具会同步更新音乐页；不要在工具返回成功前声称已经展示或播放。',
@@ -587,15 +592,28 @@ function buildProposal(name, args) {
   }
   if (name === 'prepare_memory_candidate') {
     const content = safeText(args.content, 600).replace(/\s+/g, ' ').trim();
-    const kind = ['preference', 'fact', 'instruction'].includes(args.kind) ? args.kind : 'preference';
+    // 确认卡片往返后会带 memoryKind，模型调用时带 kind，两者都要接受，否则记忆类型会被重置为“偏好”。
+    const requestedKind = args.memoryKind === undefined ? args.kind : args.memoryKind;
+    const kind = ['preference', 'fact', 'instruction'].includes(requestedKind) ? requestedKind : 'preference';
     const replacesId = safeText(args.replacesId, 120).trim() || null;
+    const rawValidUntil = safeText(args.validUntil, 40).trim();
+    const validUntilDate = rawValidUntil ? new Date(rawValidUntil) : null;
+    if (rawValidUntil && Number.isNaN(validUntilDate.getTime())) return { error: '记忆有效期无效' };
+    const validUntil = validUntilDate ? validUntilDate.toISOString() : null;
     if (!content) return { error: '候选记忆不能为空' };
     if (replacesId && !agentState.listMemories({ includeArchived: true }).some((memory) => memory.id === replacesId && memory.status === 'active')) {
       return { error: '要替换的长期记忆不存在或未生效' };
     }
+    const similar = agentState.findSimilarMemories(content, kind, { excludeIds: [replacesId] });
+    const conflicts = agentState.findConflictingMemories(content, kind, { excludeIds: [replacesId] });
     return {
-      proposal: { kind: 'create_memory_candidate', content, memoryKind: kind, replacesId },
-      content: '已准备好加入候选长期记忆。确认后仍需要你在“记忆与 Skill”面板审核采纳，才会影响后续对话。',
+      proposal: { kind: 'create_memory_candidate', content, memoryKind: kind, replacesId, validUntil },
+      content: [
+        '已准备好加入候选长期记忆。确认后仍需要你在“记忆与 Skill”面板审核采纳，才会影响后续对话。',
+        validUntil ? `有效期至 ${new Date(validUntil).toLocaleString('zh-CN', { hour12: false })}。` : '',
+        similar.length ? `与已有记忆高度相近，采纳后会归档 ${similar.length} 条旧记忆。` : '',
+        conflicts.length ? `注意：有 ${conflicts.length} 条已生效记忆与这条方向相反，建议先核对哪一条仍然成立。` : '',
+      ].filter(Boolean).join(''),
     };
   }
   if (name === 'prepare_skill_candidate') {
@@ -1209,11 +1227,12 @@ async function runProactive(settings, now = new Date(), options = {}) {
   const changeSummary = safeText(options.changeSummary, 800).trim();
   const isEventFollowUp = trigger === 'event-follow-up';
   const contextTypes = new Set();
+  const contextTrace = { memoryIds: [], skillIds: [] };
   const full = [
     {
       role: 'system',
       content: [
-        buildSystemPrompt(settings, changeSummary),
+        buildSystemPrompt(settings, changeSummary, contextTrace),
         '你现在执行的是 Loom 的后台主动检查，不是在回答用户即时提问。',
         '本轮只能调用 get_now、get_todos、get_schedule、get_notes、get_library、get_goals、get_memories、get_skills、get_music_library、get_music_playlist 等读取工具，不能创建、修改或删除任何数据。音乐只可读取已缓存数据，不能在后台自动同步整张歌单。',
         isEventFollowUp
@@ -1238,7 +1257,14 @@ async function runProactive(settings, now = new Date(), options = {}) {
   const musicState = createMusicState();
   for (let index = 0; index < 6; index += 1) {
     const result = await streamModel(settings, full, () => {}, READ_TOOL_DEFINITIONS);
-    if (!result.toolCalls.length) return { ...parseProactiveResponse(result.content), contextTypes: [...contextTypes] };
+    if (!result.toolCalls.length) {
+      return {
+        ...parseProactiveResponse(result.content),
+        contextTypes: [...contextTypes],
+        memoryIds: contextTrace.memoryIds,
+        skillIds: contextTrace.skillIds,
+      };
+    }
     full.push({ role: 'assistant', content: result.content || null, tool_calls: result.toolCalls });
     for (const call of result.toolCalls) {
       const args = parseArguments(call.function.arguments);
@@ -1310,9 +1336,16 @@ function confirmProposal(proposal) {
       content: safeProposal.content,
       kind: safeProposal.memoryKind,
       replacesId: safeProposal.replacesId,
+      validUntil: safeProposal.validUntil || null,
       source: 'chat-confirmed',
     });
-    return { content: `已加入候选长期记忆：“${memory.content}”。请在记忆与 Skill 面板审核后启用。` };
+    // 归一化去重命中已有生效记忆时，不会再生成新候选。
+    if (memory.status === 'active') {
+      return { content: `“${memory.content}”已经在生效的长期记忆里，不需要重复保存。` };
+    }
+    const similarCount = Array.isArray(memory.similarIds) ? memory.similarIds.length : 0;
+    const similarNote = similarCount ? `其中有 ${similarCount} 条与已有记忆内容相近，采纳后会转为归档。` : '';
+    return { content: `已加入候选长期记忆：“${memory.content}”。${similarNote}请在记忆与 Skill 面板审核后启用。` };
   }
   if (safeProposal.kind === 'create_skill_candidate') {
     const skill = agentState.createSkillCandidate({
@@ -1423,6 +1456,45 @@ if (process.env.WORKBENCH_AGENT_SELF_TEST === '1') {
     if (agentState.listMemories()[0]?.status !== 'candidate') throw new Error('memory candidate did not persist');
     confirmProposal(skillProposal.proposal);
     if (agentState.listSkills()[0]?.status !== 'candidate') throw new Error('skill candidate did not persist');
+    // 确认卡片往返后，记忆类型与有效期都必须保留，并且本轮注入的记忆要能被追踪。
+    const roundTripMemory = normaliseProposal({
+      kind: 'create_memory_candidate',
+      content: '自检记忆往返：事实类型不应被重置。',
+      memoryKind: 'fact',
+      replacesId: null,
+      validUntil: '2030-01-01T00:00:00.000Z',
+    });
+    if (roundTripMemory?.memoryKind !== 'fact' || roundTripMemory?.validUntil !== '2030-01-01T00:00:00.000Z') {
+      throw new Error('agent memory proposal round-trip self-test failed');
+    }
+    confirmProposal(roundTripMemory);
+    const roundTripStored = agentState.listMemories().find((memory) => memory.content.includes('往返'));
+    if (roundTripStored?.kind !== 'fact' || !roundTripStored?.validUntil) {
+      throw new Error('agent memory validity self-test failed');
+    }
+    agentState.reviewMemory(roundTripStored.id, 'activate');
+    const promptTrace = { memoryIds: [], skillIds: [] };
+    buildSystemPrompt({ profile: {}, notify: {}, agent: {} }, '自检记忆往返', promptTrace);
+    if (!promptTrace.memoryIds.includes(roundTripStored.id)) {
+      throw new Error('agent memory prompt trace self-test failed');
+    }
+    // 归一化去重命中已生效记忆时，不应再生成第二条候选。
+    const repeatMemory = normaliseProposal({
+      kind: 'create_memory_candidate',
+      content: '自检记忆往返：事实类型不应被重置。',
+      memoryKind: 'fact',
+      replacesId: null,
+    });
+    if (!confirmProposal(repeatMemory).content.includes('已经在生效的长期记忆里')) {
+      throw new Error('agent duplicate active memory self-test failed');
+    }
+    // 与已生效记忆方向相反时，确认卡片要给出核对提示。
+    const conflictSeed = agentState.createMemoryCandidate({ content: '周末安排会议。', kind: 'fact' });
+    agentState.reviewMemory(conflictSeed.id, 'activate');
+    const conflictProposal = buildProposal('prepare_memory_candidate', { content: '周末不要安排会议。', kind: 'fact' });
+    if (!conflictProposal?.content.includes('方向相反')) {
+      throw new Error('agent memory conflict hint self-test failed');
+    }
     try {
       confirmProposal({ kind: 'create_todo', title: '' });
       throw new Error('invalid proposal should be rejected');

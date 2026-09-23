@@ -513,6 +513,7 @@ export interface AgentGoal extends AgentGoalRecord {
 
 export type AgentMemoryKind = 'preference' | 'fact' | 'instruction';
 export type AgentMemoryStatus = 'candidate' | 'active' | 'rejected' | 'archived';
+export type AgentMemoryDecision = 'activate' | 'reject' | 'archive' | 'restore' | 'pin' | 'unpin';
 
 export interface AgentMemory {
   id: string;
@@ -522,9 +523,17 @@ export interface AgentMemory {
   source: string;
   replacesId: string | null;
   replacedById: string | null;
+  validUntil: string | null;
+  similarIds: string[];
+  pinned: boolean;
+  usageCount: number;
+  lastUsedAt: string | null;
   createdAt: string;
   updatedAt: string;
   reviewedAt: string | null;
+  expired?: boolean;
+  stale?: boolean;
+  archivedReason?: string;
 }
 
 export type AgentSkillStatus = 'candidate' | 'active' | 'rejected' | 'archived';
@@ -621,6 +630,8 @@ export interface AgentRun {
   finishedAt: string | null;
   suggestionId: string | null;
   contextTypes?: AgentRunContext[];
+  memoryIds?: string[];
+  skillIds?: string[];
   decision?: string;
   delivery?: AgentRunDelivery;
   error?: string;
@@ -632,7 +643,7 @@ export type AgentProposal = { operationId?: string } & (
   | { kind: 'save_important_date'; title: string; date: string }
   | { kind: 'save_preference'; preference: string }
   | { kind: 'create_goal'; title: string; description: string; targetDate: string | null }
-  | { kind: 'create_memory_candidate'; content: string; memoryKind: AgentMemoryKind; replacesId: string | null }
+  | { kind: 'create_memory_candidate'; content: string; memoryKind: AgentMemoryKind; replacesId: string | null; validUntil?: string | null }
   | { kind: 'create_skill_candidate'; name: string; description: string; instructions: string; replacesId: string | null }
   | { kind: 'send_email'; to: string; cc: string; subject: string; text: string; inReplyTo: string | null }
   | { kind: 'add_music_to_playlist'; playlistId: number; playlistName: string; trackId: number; trackTitle: string }
@@ -763,7 +774,8 @@ export interface WorkbenchApi {
     addGoalAction: (input: Pick<AgentGoalAction, 'goalId' | 'title'> & Partial<Pick<AgentGoalAction, 'type' | 'followUpAt' | 'outcome' | 'status'>>) => Promise<AgentGoalAction>;
     updateGoalAction: (id: string, patch: Partial<Pick<AgentGoalAction, 'title' | 'status' | 'followUpAt' | 'outcome'>>) => Promise<AgentGoalAction>;
     getMemories: (includeArchived?: boolean) => Promise<AgentMemory[]>;
-    reviewMemory: (id: string, decision: 'activate' | 'reject' | 'archive' | 'restore') => Promise<AgentMemory | null>;
+    updateMemory: (id: string, content: string) => Promise<AgentMemory | null>;
+    reviewMemory: (id: string, decision: AgentMemoryDecision) => Promise<AgentMemory | null>;
     getSkills: (includeArchived?: boolean) => Promise<AgentSkill[]>;
     reviewSkill: (id: string, decision: 'activate' | 'reject' | 'archive' | 'restore') => Promise<AgentSkill | null>;
     onProactiveUpdated: (callback: () => void) => () => void;

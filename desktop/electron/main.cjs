@@ -462,6 +462,11 @@ function registerIpc() {
     return result;
   });
   ipcMain.handle('agent:get-memories', (_event, includeArchived = false) => agentState.listMemories({ includeArchived: Boolean(includeArchived) }));
+  ipcMain.handle('agent:update-memory', (_event, id, content) => {
+    const result = agentState.updateMemory(id, content);
+    notifyAgentStateChanged();
+    return result;
+  });
   ipcMain.handle('agent:review-memory', (_event, id, decision) => {
     const result = agentState.reviewMemory(id, decision);
     notifyAgentStateChanged();
@@ -527,6 +532,12 @@ app.whenReady().then(() => {
 app.on('before-quit', () => {
   proactive.stop();
   notifier.stopNotifier();
+  // 记忆使用次数是合并写入的，退出前落盘一次，避免最后一次统计丢失。
+  try {
+    agentState.flushMemoryUsage();
+  } catch (error) {
+    console.error('[main] 写入记忆使用统计失败:', error.message);
+  }
   void musicService.stop();
 });
 

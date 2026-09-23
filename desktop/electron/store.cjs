@@ -11,7 +11,7 @@ const MAX_RECENT_AUTOMATIC_BACKUPS = 10;
 const DAILY_BACKUP_RETENTION_DAYS = 14;
 
 const DEFAULT_DATA = {
-  schemaVersion: 7,
+  schemaVersion: 8,
   settings: {
     profile: {
       name: '',
@@ -321,7 +321,15 @@ function normalizeData(data) {
     });
     known.add(`preference:${content}`);
   }
-  data.modules.agentMemories = memories;
+  // 补偿旧数据缺失的记忆字段，保证使用统计、有效期与近似重复判定在升级后即可用。
+  data.modules.agentMemories = memories.map((memory) => ({
+    ...memory,
+    usageCount: Number.isSafeInteger(memory.usageCount) && memory.usageCount > 0 ? memory.usageCount : 0,
+    lastUsedAt: memory.lastUsedAt || null,
+    validUntil: memory.validUntil || null,
+    similarIds: Array.isArray(memory.similarIds) ? memory.similarIds.filter((item) => typeof item === 'string') : [],
+    pinned: memory.pinned === true,
+  }));
   return data;
 }
 
@@ -495,7 +503,13 @@ if (process.env.WORKBENCH_STORE_SELF_TEST === '1') {
     assert.equal(setSettings({ profile: { avatarDataUrl: 'data:image/png;base64,iVBORw0KGgo=' } }).profile.avatarDataUrl, 'data:image/png;base64,iVBORw0KGgo=');
     assert.equal(setSettings({ profile: { avatarDataUrl: 'data:image/gif;base64,AA==' } }).profile.avatarDataUrl, '');
     assert.equal(setSettings({ profile: { avatarDataUrl: 'data:image/png;base64,AA==' } }).profile.avatarDataUrl, '');
-    assert.equal(getModule('agentMemories').find((memory) => memory.content === '旧版工作偏好')?.status, 'active');
+    const migratedMemory = getModule('agentMemories').find((memory) => memory.content === '旧版工作偏好');
+    assert.equal(migratedMemory?.status, 'active');
+    assert.equal(migratedMemory.usageCount, 0);
+    assert.equal(migratedMemory.lastUsedAt, null);
+    assert.equal(migratedMemory.validUntil, null);
+    assert.equal(migratedMemory.pinned, false);
+    assert.deepEqual(migratedMemory.similarIds, []);
     setSettings({ agent: { apiKey: 'store-self-test-secret' } });
     assert.equal(getSettings().agent.modelProfiles[0].apiKey, 'store-self-test-secret');
     const publicSettings = safeSettingsCopy(getSettings());

@@ -150,6 +150,7 @@ contextBridge.exposeInMainWorld('workbench', {
     addGoalAction: (input) => ipcRenderer.invoke('agent:add-goal-action', input),
     updateGoalAction: (id, patch) => ipcRenderer.invoke('agent:update-goal-action', id, patch),
     getMemories: (includeArchived = false) => ipcRenderer.invoke('agent:get-memories', includeArchived),
+    updateMemory: (id, content) => ipcRenderer.invoke('agent:update-memory', id, content),
     reviewMemory: (id, decision) => ipcRenderer.invoke('agent:review-memory', id, decision),
     getSkills: (includeArchived = false) => ipcRenderer.invoke('agent:get-skills', includeArchived),
     reviewSkill: (id, decision) => ipcRenderer.invoke('agent:review-skill', id, decision),

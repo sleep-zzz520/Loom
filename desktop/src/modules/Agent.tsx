@@ -1,8 +1,8 @@
 import { FormEvent, useEffect, useRef, useState } from 'react';
-import { Archive, ArrowDown, ArrowUp, Brain, CalendarDays, Check, ChevronDown, CircleCheck, Clock3, Database, FileText, History, ListPlus, ListTodo, Mail, MessageSquare, MoreHorizontal, NotebookPen, Pause, Pencil, Plus, RefreshCw, RotateCcw, Settings2, Sparkles, StickyNote, Target, Trash2, WandSparkles, X } from 'lucide-react';
+import { Archive, ArrowDown, ArrowUp, Brain, CalendarDays, Check, ChevronDown, CircleCheck, Clock3, Database, FileText, History, ListPlus, ListTodo, Mail, MessageSquare, MoreHorizontal, NotebookPen, Pause, Pencil, Pin, Plus, RefreshCw, RotateCcw, Settings2, Sparkles, StickyNote, Target, Trash2, WandSparkles, X } from 'lucide-react';
 import AgentMessageContent from '../components/AgentMessageContent';
 import { DEFAULT_CONVERSATION_TITLE, conversationTitleFromMessages, isPlaceholderConversationTitle } from '../components/agentConversationTitle';
-import type { AgentConversation, AgentConversationStore, AgentDirectMessage, AgentGoal, AgentGoalAction, AgentGoalActionStatus, AgentGoalStatus, AgentMemory, AgentProposal, AgentRun, AgentRunStatus, AgentSkill, AgentSuggestion, AgentSuggestionStatus, AgentTrigger, ChatAttachment, ChatMessage, ProfileItem } from '../types';
+import type { AgentConversation, AgentConversationStore, AgentDirectMessage, AgentGoal, AgentGoalAction, AgentGoalActionStatus, AgentGoalStatus, AgentMemory, AgentMemoryDecision, AgentProposal, AgentRun, AgentRunStatus, AgentSkill, AgentSuggestion, AgentSuggestionStatus, AgentTrigger, ChatAttachment, ChatMessage, ProfileItem } from '../types';
 
 const SUGGESTIONS = [
   '今天有什么要做？',
@@ -157,6 +157,8 @@ export default function Agent({
   const [memories, setMemories] = useState<AgentMemory[]>([]);
   const [skills, setSkills] = useState<AgentSkill[]>([]);
   const [knowledgeOpen, setKnowledgeOpen] = useState(false);
+  const [editingMemoryId, setEditingMemoryId] = useState<string | null>(null);
+  const [memoryDraft, setMemoryDraft] = useState('');
   const [stateBusy, setStateBusy] = useState(false);
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
   const [editingConversationId, setEditingConversationId] = useState<string | null>(null);
@@ -591,7 +593,7 @@ export default function Agent({
     }
   }
 
-  async function reviewMemory(id: string, decision: 'activate' | 'reject' | 'archive' | 'restore') {
+  async function reviewMemory(id: string, decision: AgentMemoryDecision) {
     if (stateBusy) return;
     setStateBusy(true);
     setError('');
@@ -600,6 +602,22 @@ export default function Agent({
       await loadAgentState();
     } catch (err) {
       setError(err instanceof Error ? err.message : '审核记忆失败，请稍后重试');
+    } finally {
+      setStateBusy(false);
+    }
+  }
+
+  async function saveMemoryEdit(id: string, content: string) {
+    if (stateBusy || !content.trim()) return;
+    setStateBusy(true);
+    setError('');
+    try {
+      await window.workbench.agent.updateMemory(id, content);
+      setEditingMemoryId(null);
+      setMemoryDraft('');
+      await loadAgentState();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '保存记忆失败，请稍后重试');
     } finally {
       setStateBusy(false);
     }
@@ -860,12 +878,15 @@ export default function Agent({
                             ? `已读取：${run.contextTypes.map((type) => runContextLabel[type]).join('、')}`
                             : '';
                           const deliverySummary = run.delivery ? runDeliveryLabel[run.delivery] : '';
+                          const memoryDetail = run.memoryIds?.length
+                            ? `本轮记忆：${run.memoryIds.map((id) => memories.find((item) => item.id === id)?.content || '（已删除的记忆）').join('；')}`
+                            : '';
                           return (
                             <article key={run.id} className="session-run-entry">
                               <span className={`agent-run-status-dot${run.status === 'running' ? ' is-running' : ''}${run.status === 'failed' ? ' is-failed' : ''}`} aria-hidden="true" />
                               <div className="agent-run-copy">
                                 <strong>{runTriggerLabel[run.trigger]} · {runStatusLabel[run.status]}</strong>
-                                <small title={[summary, contextSummary, deliverySummary].filter(Boolean).join(' · ')}>{summary}{contextSummary ? ` · ${contextSummary}` : ''}{deliverySummary ? ` · ${deliverySummary}` : ''}</small>
+                                <small title={[summary, contextSummary, memoryDetail, deliverySummary].filter(Boolean).join(' · ')}>{summary}{contextSummary ? ` · ${contextSummary}` : ''}{deliverySummary ? ` · ${deliverySummary}` : ''}</small>
                               </div>
                               <time className="agent-run-meta" dateTime={run.startedAt}>{formatRunTime(run.startedAt)}</time>
                             </article>
@@ -938,6 +959,18 @@ export default function Agent({
             onToggle={() => setKnowledgeOpen((open) => !open)}
             onReviewMemory={reviewMemory}
             onReviewSkill={reviewSkill}
+            onUpdateMemory={saveMemoryEdit}
+            editingMemoryId={editingMemoryId}
+            memoryDraft={memoryDraft}
+            onStartMemoryEdit={(memory) => {
+              setEditingMemoryId(memory.id);
+              setMemoryDraft(memory.content);
+            }}
+            onCancelMemoryEdit={() => {
+              setEditingMemoryId(null);
+              setMemoryDraft('');
+            }}
+            onMemoryDraftChange={setMemoryDraft}
           />
           {proactiveSuggestions.length > 0 && (
             <section className="agent-proactive" aria-labelledby="agent-proactive-title">
@@ -1219,7 +1252,7 @@ function ProposalCard({ proposal, busy, onConfirm, onCancel }: { proposal: Agent
         ) : isGoal ? (
           <small>{proposal.description || '创建后可关联待办、主动建议和手动跟进行动。'}{proposal.targetDate ? ` · 目标日期 ${new Date(proposal.targetDate).toLocaleString('zh-CN', { hour12: false })}` : ''}</small>
         ) : isMemory ? (
-          <small>确认后进入候选区，审核采纳后才会影响后续对话。</small>
+          <small>确认后进入候选区，审核采纳后才会影响后续对话。{proposal.validUntil ? `有效期至 ${new Date(proposal.validUntil).toLocaleString('zh-CN', { hour12: false })}。` : ''}</small>
         ) : isSkill ? (
           <small>{proposal.description} · 确认后仍需审核启用。</small>
         ) : isEmail ? (
@@ -1431,6 +1464,12 @@ function AgentKnowledgePanel({
   onToggle,
   onReviewMemory,
   onReviewSkill,
+  onUpdateMemory,
+  editingMemoryId,
+  memoryDraft,
+  onStartMemoryEdit,
+  onCancelMemoryEdit,
+  onMemoryDraftChange,
 }: {
   memories: AgentMemory[];
   skills: AgentSkill[];
@@ -1438,8 +1477,14 @@ function AgentKnowledgePanel({
   pendingCount: number;
   busy: boolean;
   onToggle: () => void;
-  onReviewMemory: (id: string, decision: 'activate' | 'reject' | 'archive' | 'restore') => void;
+  onReviewMemory: (id: string, decision: AgentMemoryDecision) => void;
   onReviewSkill: (id: string, decision: 'activate' | 'reject' | 'archive' | 'restore') => void;
+  onUpdateMemory: (id: string, content: string) => void;
+  editingMemoryId: string | null;
+  memoryDraft: string;
+  onStartMemoryEdit: (memory: AgentMemory) => void;
+  onCancelMemoryEdit: () => void;
+  onMemoryDraftChange: (value: string) => void;
 }) {
   const candidateMemories = memories.filter((memory) => memory.status === 'candidate');
   const activeMemories = memories.filter((memory) => memory.status === 'active');
@@ -1447,6 +1492,19 @@ function AgentKnowledgePanel({
   const candidateSkills = skills.filter((skill) => skill.status === 'candidate');
   const activeSkills = skills.filter((skill) => skill.status === 'active');
   const archivedSkills = skills.filter((skill) => skill.status === 'archived');
+  const pinnedMemories = activeMemories.filter((memory) => memory.pinned);
+  const memoryKindLabel = (kind: AgentMemory['kind']) => (kind === 'preference' ? '偏好' : kind === 'fact' ? '事实' : '工作规则');
+  const memoryMeta = (memory: AgentMemory) => [
+    memory.pinned ? '已置顶，每次对话都会带上' : '',
+    memory.usageCount ? `已使用 ${memory.usageCount} 次` : '',
+    memory.validUntil
+      ? `${memory.expired ? '已过期' : '有效期至'} ${new Date(memory.validUntil).toLocaleString('zh-CN', { hour12: false })}`
+      : '',
+    memory.stale ? '超过 30 天未被使用，可考虑归档' : '',
+  ].filter(Boolean).join(' · ');
+  const memorySupersedeNote = (memory: AgentMemory) => (
+    memory.similarIds?.length ? `采纳后将归档 ${memory.similarIds.length} 条内容相近的旧记忆` : ''
+  );
   return (
     <section className={`agent-knowledge${open ? ' is-open' : ''}`} aria-label="记忆与 Skill">
       <button type="button" className="agent-knowledge-trigger" onClick={onToggle} aria-expanded={open} aria-controls="agent-knowledge-content">
@@ -1461,7 +1519,7 @@ function AgentKnowledgePanel({
               {candidateMemories.map((memory) => (
                 <article key={memory.id} className="agent-knowledge-item">
                   <Brain size={15} />
-                  <div><strong>候选记忆</strong><p>{memory.content}</p><small>{memory.kind === 'preference' ? '偏好' : memory.kind === 'fact' ? '事实' : '工作规则'}</small></div>
+                  <div><strong>候选记忆</strong><p>{memory.content}</p><small>{[memoryKindLabel(memory.kind), memoryMeta(memory), memorySupersedeNote(memory)].filter(Boolean).join(' · ')}</small></div>
                   <div className="agent-knowledge-actions"><button type="button" className="text-btn agent-knowledge-approve" onClick={() => onReviewMemory(memory.id, 'activate')} disabled={busy}><Check size={13} />采纳</button><button type="button" className="text-btn" onClick={() => onReviewMemory(memory.id, 'reject')} disabled={busy}>丢弃</button></div>
                 </article>
               ))}
@@ -1475,12 +1533,34 @@ function AgentKnowledgePanel({
             </div>
           )}
           <div className="agent-knowledge-group">
-            <h3>长期记忆</h3>
+            <h3>长期记忆{pinnedMemories.length ? `（已置顶 ${pinnedMemories.length} 条，每轮最多带入 6 条）` : ''}</h3>
             {activeMemories.length ? activeMemories.map((memory) => (
               <article key={memory.id} className="agent-knowledge-item is-active">
                 <Brain size={15} />
-                <div><strong>{memory.kind === 'preference' ? '偏好' : memory.kind === 'fact' ? '事实' : '工作规则'}</strong><p>{memory.content}</p></div>
-                <button type="button" className="text-btn" onClick={() => onReviewMemory(memory.id, 'archive')} disabled={busy}><Archive size={13} />归档</button>
+                {editingMemoryId === memory.id ? (
+                  <form
+                    className="agent-knowledge-edit"
+                    onSubmit={(event) => {
+                      event.preventDefault();
+                      onUpdateMemory(memory.id, memoryDraft);
+                    }}
+                  >
+                    <textarea value={memoryDraft} onChange={(event) => onMemoryDraftChange(event.target.value)} rows={2} maxLength={600} autoFocus />
+                    <div className="agent-knowledge-actions">
+                      <button type="submit" className="text-btn agent-knowledge-approve" disabled={busy || !memoryDraft.trim()}><Check size={13} />保存</button>
+                      <button type="button" className="text-btn" onClick={onCancelMemoryEdit} disabled={busy}>取消</button>
+                    </div>
+                  </form>
+                ) : (
+                  <>
+                    <div><strong>{memoryKindLabel(memory.kind)}</strong><p>{memory.content}</p>{memoryMeta(memory) && <small>{memoryMeta(memory)}</small>}</div>
+                    <div className="agent-knowledge-actions">
+                      <button type="button" className="text-btn" onClick={() => onStartMemoryEdit(memory)} disabled={busy}><Pencil size={13} />编辑</button>
+                      <button type="button" className="text-btn" onClick={() => onReviewMemory(memory.id, memory.pinned ? 'unpin' : 'pin')} disabled={busy}><Pin size={13} />{memory.pinned ? '取消置顶' : '置顶'}</button>
+                      <button type="button" className="text-btn" onClick={() => onReviewMemory(memory.id, 'archive')} disabled={busy}><Archive size={13} />归档</button>
+                    </div>
+                  </>
+                )}
               </article>
             )) : <p className="agent-knowledge-empty">暂无长期记忆</p>}
           </div>
@@ -1500,7 +1580,11 @@ function AgentKnowledgePanel({
               {archivedMemories.map((memory) => (
                 <article key={memory.id} className="agent-knowledge-item is-active">
                   <Brain size={15} />
-                  <div><strong>记忆 · {memory.kind === 'preference' ? '偏好' : memory.kind === 'fact' ? '事实' : '工作规则'}</strong><p>{memory.content}</p></div>
+                  <div>
+                    <strong>记忆 · {memoryKindLabel(memory.kind)}</strong>
+                    <p>{memory.content}</p>
+                    {memory.archivedReason === 'capacity' && <small>因超出容量归档，恢复后仍可继续使用</small>}
+                  </div>
                   <button type="button" className="text-btn" onClick={() => onReviewMemory(memory.id, 'restore')} disabled={busy}><RotateCcw size={13} />恢复</button>
                 </article>
               ))}
