@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { CalendarDays, ChevronRight, CircleAlert, FileText, ListTodo, RefreshCw, Target } from 'lucide-react';
+import { CalendarDays, ChevronRight, CircleAlert, FileText, ListTodo, RefreshCw } from 'lucide-react';
 import type { ModuleKey } from '../App';
 import type { WeeklyItem, WeeklySnapshot } from '../types';
 import WeeklyPlanDraft from '../components/WeeklyPlanDraft';
@@ -53,43 +53,37 @@ export default function WeeklyReview({ onNavigate }: WeeklyReviewProps) {
   if (error && !snapshot) return <section className="weekly-page weekly-page-loading"><p>{error}</p><button type="button" className="text-btn" onClick={() => void load()}>重新加载</button></section>;
 
   const data = snapshot!;
+  const overdueIds = new Set(data.overdue.map((item) => item.id));
+  const currentWeek = data.currentWeek.filter((item) => !overdueIds.has(item.id));
   return (
     <section className="weekly-page" aria-label="本周回顾">
       <header className="weekly-header">
-        <div><p>本周回顾</p><h1>{rangeLabel(data.weekStart, data.weekEnd)}</h1><span>只汇总已有记录，不会替你补写完成情况。</span></div>
-        <button type="button" className="weekly-refresh" onClick={() => void load()} disabled={loading} aria-label="刷新本周回顾" title="刷新本周回顾"><RefreshCw size={15} className={loading ? 'weekly-spin' : ''} /><span>刷新</span></button>
+        <div><h1>本周回顾</h1><p>{rangeLabel(data.weekStart, data.weekEnd)}</p></div>
+        <div className="weekly-header-actions">
+          <button type="button" className="weekly-plan-action" onClick={() => setPlanOpen(true)}>安排下周 <ChevronRight size={14} aria-hidden="true" /></button>
+          <button type="button" className="weekly-refresh" onClick={() => void load()} disabled={loading} aria-label="刷新本周回顾" title="刷新本周回顾"><RefreshCw size={16} className={loading ? 'weekly-spin' : ''} /></button>
+        </div>
       </header>
       {error && <p className="weekly-error" role="status">{error}</p>}
 
-      <dl className="weekly-summary" aria-label="本周概览">
-        <div><dt>本周安排</dt><dd>{data.currentWeekTotal}</dd><small>带日期或时间的事项</small></div>
-        <div className={data.overdueCount ? 'is-attention' : ''}><dt>仍需收尾</dt><dd>{data.overdueCount}</dd><small>当前尚未完成且已到期</small></div>
-        <div><dt>本周收集</dt><dd>{data.captureCount}</dd><small>本周更新的备忘录</small></div>
-        <div><dt>进行目标</dt><dd>{data.activeGoalCount}</dd><small>当前活跃的 Agent 目标</small></div>
-      </dl>
-
-      <div className="weekly-grid">
-        <section className="weekly-section weekly-current" aria-labelledby="weekly-current-title">
-          <div className="weekly-section-head"><div><CalendarDays size={15} aria-hidden="true" /><h2 id="weekly-current-title">这一周的安排</h2></div><button type="button" onClick={() => onNavigate('calendar')}>打开日历 <ChevronRight size={14} /></button></div>
-          <ItemList items={data.currentWeek} empty="这一周没有带日期的待办或日程。" onNavigate={onNavigate} />
+      <div className="weekly-content">
+        <section className="weekly-section weekly-overdue" aria-labelledby="weekly-overdue-title">
+          <div className="weekly-section-head"><div><CircleAlert size={16} aria-hidden="true" /><h2 id="weekly-overdue-title">需要收尾</h2></div><button type="button" onClick={() => onNavigate('todos')}>全部待办 <ChevronRight size={14} /></button></div>
+          <ItemList items={data.overdue} empty="暂无待收尾事项" onNavigate={onNavigate} />
         </section>
-        <aside className="weekly-side">
-          <section className="weekly-section weekly-overdue" aria-labelledby="weekly-overdue-title">
-            <div className="weekly-section-head"><div><CircleAlert size={15} aria-hidden="true" /><h2 id="weekly-overdue-title">需要收尾</h2></div><button type="button" onClick={() => onNavigate('todos')}>全部待办 <ChevronRight size={14} /></button></div>
-            <ItemList items={data.overdue} empty="目前没有超期事项。" onNavigate={onNavigate} />
-          </section>
-          <section className="weekly-section weekly-notes" aria-labelledby="weekly-notes-title">
-            <div className="weekly-section-head"><div><FileText size={15} aria-hidden="true" /><h2 id="weekly-notes-title">本周收集</h2></div><button type="button" onClick={() => onNavigate('notes')}>打开备忘录 <ChevronRight size={14} /></button></div>
-            {data.recentNotes.length ? <ol className="weekly-note-list">{data.recentNotes.map((note) => <li key={note.id}><button type="button" onClick={() => onNavigate('notes')}><span><strong>{note.title}</strong><small>{new Intl.DateTimeFormat('zh-CN', { month: 'numeric', day: 'numeric' }).format(new Date(note.updatedAt))} 更新</small></span><ChevronRight size={15} aria-hidden="true" /></button></li>)}</ol> : <p className="weekly-empty">这一周还没有更新备忘录。</p>}
-          </section>
-        </aside>
+        <section className="weekly-section weekly-current" aria-labelledby="weekly-current-title">
+          <div className="weekly-section-head"><div><CalendarDays size={16} aria-hidden="true" /><h2 id="weekly-current-title">本周安排</h2></div><button type="button" onClick={() => onNavigate('calendar')}>打开日历 <ChevronRight size={14} /></button></div>
+          <ItemList items={currentWeek} empty={data.currentWeekTotal ? '没有其他安排' : '本周暂无安排'} onNavigate={onNavigate} />
+        </section>
+        <section className="weekly-section weekly-notes" aria-labelledby="weekly-notes-title">
+          <div className="weekly-section-head"><div><FileText size={16} aria-hidden="true" /><h2 id="weekly-notes-title">本周收集</h2></div><button type="button" onClick={() => onNavigate('notes')}>打开备忘录 <ChevronRight size={14} /></button></div>
+          {data.recentNotes.length ? <ol className="weekly-note-list">{data.recentNotes.map((note) => <li key={note.id}><button type="button" onClick={() => onNavigate('notes')}><span><strong>{note.title}</strong><small>{new Intl.DateTimeFormat('zh-CN', { month: 'numeric', day: 'numeric' }).format(new Date(note.updatedAt))} 更新</small></span><ChevronRight size={15} aria-hidden="true" /></button></li>)}</ol> : <p className="weekly-empty">本周暂无收集</p>}
+        </section>
+        <section className="weekly-section weekly-next" aria-labelledby="weekly-next-title">
+          <div className="weekly-section-head"><div><ListTodo size={16} aria-hidden="true" /><h2 id="weekly-next-title">下周安排</h2></div></div>
+          <ItemList items={data.nextWeek} empty="下周暂无安排" onNavigate={onNavigate} />
+        </section>
       </div>
-
-      <section className="weekly-section weekly-next" aria-labelledby="weekly-next-title">
-        <div className="weekly-section-head"><div><ListTodo size={15} aria-hidden="true" /><h2 id="weekly-next-title">下周准备</h2></div><button type="button" onClick={() => setPlanOpen(true)}>安排下周 <ChevronRight size={14} /></button></div>
-        <ItemList items={data.nextWeek} empty="下周还没有排入具体时间的事项。需要时可用 ⌘ K 快速添加。" onNavigate={onNavigate} />
-      </section>
-      <p className="weekly-footnote"><Target size={14} aria-hidden="true" /> 回顾的是当前留在工作台里的事实；已完成但未保留完成时间的事项不会被计入本周完成数。</p>
       <WeeklyPlanDraft open={planOpen} weekStart={data.nextWeekStart} weekEnd={data.nextWeekEnd} onClose={() => setPlanOpen(false)} onApplied={() => void load()} />
     </section>
   );

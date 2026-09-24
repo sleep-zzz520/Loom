@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type ChangeEvent } from 'react';
+import { ArrowLeft } from 'lucide-react';
 import type { SettingsKey } from '../App';
 import type { AgentModelProfile, AppSettings, AppUpdateStatus, BackupRecord, NotificationHistoryItem } from '../types';
 import { TimeField } from '../components/DateFields';
@@ -6,10 +7,12 @@ import { AVATAR_ACCEPT, avatarUploadError } from './profileAvatar';
 
 type SettingsProps = {
   section: SettingsKey;
+  onSelectSection: (section: SettingsKey) => void;
+  onBack: () => void;
 };
 
 type SettingsSaveState = 'saved' | 'saving' | 'error';
-type SettingsConfigPane = 'agent' | 'models' | 'music' | 'recovery' | 'updates';
+type SettingsConfigPane = 'agent' | 'models' | 'github' | 'music' | 'recovery' | 'updates';
 
 const SAVE_STATE_LABEL: Record<SettingsSaveState, string> = {
   saved: '已自动保存',
@@ -46,12 +49,13 @@ const AGENT_PROACTIVE_STYLE_OPTIONS: Array<{ value: AppSettings['agent']['person
 const SETTINGS_CONFIG_PANES: Array<{ id: SettingsConfigPane; label: string }> = [
   { id: 'agent', label: 'Agent' },
   { id: 'models', label: '模型服务' },
+  { id: 'github', label: 'GitHub' },
   { id: 'music', label: '音乐服务' },
   { id: 'recovery', label: '数据与恢复' },
   { id: 'updates', label: '应用更新' },
 ];
 
-export default function Settings({ section }: SettingsProps) {
+export default function Settings({ section, onSelectSection, onBack }: SettingsProps) {
   const pageMeta = SETTINGS_PAGE_META[section];
   const [settings, setSettingsState] = useState<AppSettings | null>(null);
   const [history, setHistory] = useState<NotificationHistoryItem[]>([]);
@@ -67,6 +71,9 @@ export default function Settings({ section }: SettingsProps) {
   const [updateBusy, setUpdateBusy] = useState(false);
   const [configPane, setConfigPane] = useState<SettingsConfigPane>('models');
   const [selectedAgentModelProfileId, setSelectedAgentModelProfileId] = useState('');
+  const [githubCheckBusy, setGithubCheckBusy] = useState(false);
+  const [githubStatus, setGithubStatus] = useState<Awaited<ReturnType<typeof window.workbench.github.status>> | null>(null);
+  const githubCheckRevisionRef = useRef(0);
 
   useEffect(() => {
     Promise.all([
@@ -114,15 +121,64 @@ export default function Settings({ section }: SettingsProps) {
       await window.workbench.data.setSettings({
         profile: nextSettings.profile,
         agent: nextSettings.agent,
+        github: nextSettings.github,
         netease: nextSettings.netease,
         notify: nextSettings.notify,
         sync: nextSettings.sync,
       });
-      if (revision === saveRevisionRef.current) setSaveState('saved');
+      if (revision === saveRevisionRef.current) {
+        if (nextSettings.github?.token) {
+          setSettingsState((current) => current?.github?.token === nextSettings.github.token
+            ? { ...current, github: { ...current.github, token: '' } }
+            : current);
+        }
+        setSaveState('saved');
+      }
+      return true;
     } catch {
       if (revision === saveRevisionRef.current) setSaveState('error');
+      return false;
     }
   }, []);
+
+  async function handleBack() {
+    if (settings && saveState !== 'saved' && !(await persistSettings(settings))) return;
+    onBack();
+  }
+
+  const pageNavigation = (
+    <div className="settings-page-navigation">
+      <button type="button" className="settings-back" onClick={() => void handleBack()}>
+        <ArrowLeft size={18} aria-hidden="true" />返回
+      </button>
+    </div>
+  );
+
+  const settingsSidebar = (
+    <aside className="settings-category-sidebar">
+      <nav aria-label="设置分类">
+        <div className="settings-category-group">
+          <span className="settings-category-label">个人</span>
+          {(['settings-profile', 'settings-notifications'] as SettingsKey[]).map((key) => (
+            <button key={key} type="button" className={section === key ? 'is-active' : ''}
+              aria-current={section === key ? 'page' : undefined} onClick={() => onSelectSection(key)}>
+              {SETTINGS_PAGE_META[key].title}
+            </button>
+          ))}
+        </div>
+        <div className="settings-category-group">
+          <span className="settings-category-label">系统与 Agent</span>
+          {SETTINGS_CONFIG_PANES.map((pane) => (
+            <button key={pane.id} type="button" className={section === 'settings-config' && configPane === pane.id ? 'is-active' : ''}
+              aria-current={section === 'settings-config' && configPane === pane.id ? 'page' : undefined}
+              onClick={() => { setConfigPane(pane.id); onSelectSection('settings-config'); }}>
+              {pane.label}
+            </button>
+          ))}
+        </div>
+      </nav>
+    </aside>
+  );
 
   useEffect(() => {
     if (!settings || saveState !== 'saving') return;
@@ -130,11 +186,39 @@ export default function Settings({ section }: SettingsProps) {
     return () => window.clearTimeout(timer);
   }, [settings, saveState, persistSettings]);
 
+  const checkGithub = useCallback(async () => {
+    const revision = ++githubCheckRevisionRef.current;
+    setGithubCheckBusy(true);
+    try {
+      const result = await window.workbench.github.status();
+      if (revision === githubCheckRevisionRef.current) setGithubStatus(result);
+    } catch (error) {
+      if (revision === githubCheckRevisionRef.current) {
+        setGithubStatus({ connected: false, enabled: false, tokenConfigured: false, toolCount: 0,
+          message: error instanceof Error ? error.message : '无法读取 GitHub 连接状态' });
+      }
+    } finally {
+      if (revision === githubCheckRevisionRef.current) setGithubCheckBusy(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (configPane !== 'github' || !settings || saveState !== 'saved') return;
+    void checkGithub();
+    return () => { githubCheckRevisionRef.current += 1; };
+  }, [configPane, settings?.github?.enabled, settings?.github?.token, saveState, checkGithub]);
+
   if (!settings) {
     return (
       <section className="module-page">
-        <h2 className="page-title">设置</h2>
-        <p className="page-sub">读取设置中</p>
+        <div className={`settings-grid settings-grid--${section}`}>
+          {pageNavigation}
+          {settingsSidebar}
+          <section className="settings-section" aria-label="设置内容">
+            <h2 className="page-title">设置</h2>
+            <p className="page-sub">读取设置中</p>
+          </section>
+        </div>
       </section>
     );
   }
@@ -165,6 +249,7 @@ export default function Settings({ section }: SettingsProps) {
       email: settings.email,
       profile: patch.profile ?? settings.profile,
       netease: patch.netease ?? settings.netease,
+      github: patch.github ?? settings.github,
       notify: patch.notify ?? settings.notify,
       agent: patch.agent ?? settings.agent,
       sync: patch.sync ?? settings.sync,
@@ -375,18 +460,21 @@ export default function Settings({ section }: SettingsProps) {
   return (
     <section className="module-page">
       <div className={`settings-grid settings-grid--${section}`}>
+        {pageNavigation}
+        {settingsSidebar}
         <section className="settings-section" data-settings-page={section} aria-label="设置内容">
           <header className="settings-page-header">
             <div className="settings-page-heading">
-              <span className="settings-eyebrow">设置</span>
-              <h2>{pageMeta.title}</h2>
+              <h2 id="settings-page-title">{section === 'settings-config' ? SETTINGS_CONFIG_PANES.find((pane) => pane.id === configPane)?.label : pageMeta.title}</h2>
             </div>
-            <div className="settings-save-bar">
+            <div className="settings-header-actions">
+              <div className="settings-save-bar">
               <span className={`settings-save-state ${saveState}`} role="status" aria-live="polite">
                 <span className="settings-save-state-dot" aria-hidden="true" />
                 <span>{SAVE_STATE_LABEL[saveState]}</span>
               </span>
               {saveState === 'error' && <button type="button" className="settings-save-retry" onClick={retrySave}>重试</button>}
+              </div>
             </div>
           </header>
           <div key={section} className={`settings-section-content settings-section-content--${section}`}>
@@ -677,22 +765,8 @@ export default function Settings({ section }: SettingsProps) {
           </>}
 
           {section === 'settings-config' && <div className={`settings-config-workspace is-${configPane}`}>
-            <nav className="settings-config-nav" aria-label="系统与 Agent 设置分类">
-              {SETTINGS_CONFIG_PANES.map((pane) => <button
-                key={pane.id}
-                type="button"
-                className={configPane === pane.id ? 'is-active' : ''}
-                aria-current={configPane === pane.id ? 'page' : undefined}
-                onClick={() => setConfigPane(pane.id)}
-              >{pane.label}</button>)}
-            </nav>
             <div className="settings-config-panel">
-          <section hidden={configPane !== 'updates'} className="settings-subsection settings-subsection--updates" aria-labelledby="app-update-title">
-            <div className="settings-subsection-head">
-              <div>
-                <h3 id="app-update-title">应用更新</h3>
-              </div>
-            </div>
+          <section hidden={configPane !== 'updates'} className="settings-subsection settings-subsection--updates" aria-labelledby="settings-page-title">
             <div className={`settings-update-card is-${updateStatus?.state || 'loading'}`} aria-live="polite">
               <div className="settings-update-copy">
                 <span className="settings-update-kicker">当前版本 {updateStatus?.currentVersion || '读取中…'}</span>
@@ -807,8 +881,7 @@ export default function Settings({ section }: SettingsProps) {
               <span className="settings-toggle-track" aria-hidden="true"><span /></span>
             </label>
           </section>
-          <section hidden={configPane !== 'models'} className="settings-subsection settings-subsection--connection settings-agent-models-panel" aria-labelledby="agent-service-title">
-            <div className="settings-subsection-head"><h3 id="agent-service-title">模型服务</h3></div>
+          <section hidden={configPane !== 'models'} className="settings-subsection settings-subsection--connection settings-agent-models-panel" aria-labelledby="settings-page-title">
             <div className="settings-model-manager">
               <div className="settings-model-list" aria-label="已保存的模型配置">
                 <div className="settings-model-list-head"><strong>模型</strong><button type="button" className="settings-model-profile-add" onClick={addAgentModelProfile}>添加</button></div>
@@ -838,10 +911,49 @@ export default function Settings({ section }: SettingsProps) {
               </div>
             </div>
           </section>
+          <section hidden={configPane !== 'github'} className="settings-subsection settings-subsection--connection" aria-labelledby="settings-page-title">
+            <p className="github-connection-intro">先填写访问令牌，再开启 GitHub 并测试连接。连接后，Agent 可查询仓库、Issue 和 Pull Request；创建 Issue 前会请你确认。</p>
+            <div className={`github-connection-status${githubStatus?.connected ? ' is-connected' : ''}${githubStatus?.enabled && githubStatus.tokenConfigured && !githubStatus.connected && !githubCheckBusy ? ' is-error' : ''}`} role="status" aria-live="polite">
+              <span className="github-connection-dot" aria-hidden="true" />
+              <div>
+                <strong>{saveState === 'saving' ? '正在保存连接设置…' : githubCheckBusy ? '正在检查连接…' : githubStatus?.connected ? '已连接 GitHub' : githubStatus?.tokenConfigured ? githubStatus.enabled ? '连接未成功' : '已保存令牌，尚未启用' : '尚未配置'}</strong>
+                <span>{saveState === 'saving' ? '保存完成后将更新连接状态' : githubCheckBusy ? '请稍候' : githubStatus?.connected ? `${githubStatus.toolCount} 项工具可用` : githubStatus?.message || '保存访问令牌后可测试连接'}</span>
+              </div>
+            </div>
+            <label className="field github-token-field">
+              <span>访问令牌</span>
+              <input
+                type="password"
+                value={settings.github?.token || ''}
+                onChange={(event) => { update({ github: { ...settings.github, token: event.target.value } }); setGithubStatus(null); }}
+                placeholder={githubStatus?.tokenConfigured ? '输入新令牌以替换已保存的令牌' : '粘贴 GitHub 访问令牌'}
+                autoComplete="off"
+              />
+            </label>
+            <p className="github-token-note">已保存的令牌不会回显；留空会保留原令牌。令牌仅在本机加密保存。</p>
+            <label className={`settings-toggle github-enable-row${settings.github?.enabled ? ' is-on' : ''}`}>
+              <span className="settings-toggle-copy"><strong>允许 Agent 使用 GitHub</strong></span>
+              <input
+                type="checkbox"
+                checked={settings.github?.enabled === true}
+                onChange={(event) => { update({ github: { ...settings.github, enabled: event.target.checked } }); setGithubStatus(null); }}
+                aria-label="允许 Agent 使用 GitHub"
+              />
+              <span className="settings-toggle-track" aria-hidden="true"><span /></span>
+            </label>
+            <div className="github-connection-actions">
+              <button type="button" className="settings-recovery-secondary" disabled={githubCheckBusy || saveState !== 'saved' || !settings.github?.enabled || !githubStatus?.tokenConfigured} onClick={() => void checkGithub()}>{githubCheckBusy ? '连接中…' : githubStatus?.connected ? '重新测试连接' : '测试连接'}</button>
+              <a href="https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens" target="_blank" rel="noreferrer">如何创建访问令牌</a>
+            </div>
+            <details className="github-connection-help">
+              <summary>令牌权限与使用范围</summary>
+              <p>只授权需要访问的仓库。读取仓库内容、Issue 和 Pull Request 需要对应的读取权限；创建 Issue 还需要该仓库的 Issues 写入权限。Loom 暂不开放合并 PR 或推送代码。</p>
+            </details>
+          </section>
           <details hidden={configPane !== 'music'} className="settings-advanced-section">
             <summary>
               <span className="settings-advanced-summary-copy">
-                <strong id="music-service-title">音乐服务</strong>
+                <strong>连接设置</strong>
               </span>
               <span className="settings-advanced-label">高级</span>
             </summary>
@@ -857,10 +969,9 @@ export default function Settings({ section }: SettingsProps) {
               </label>
             </div>
           </details>
-          <section hidden={configPane !== 'recovery'} className="settings-subsection settings-subsection--recovery" aria-labelledby="data-recovery-title">
+          <section hidden={configPane !== 'recovery'} className="settings-subsection settings-subsection--recovery" aria-labelledby="settings-page-title">
             <div className="settings-subsection-head">
               <div>
-                <h3 id="data-recovery-title">数据与恢复</h3>
                 <p>备份和导出不包含密钥。</p>
               </div>
             </div>

@@ -74,6 +74,23 @@ function protectAgentApiKeyPatch(patch, { currentAgent = null, currentApiBase = 
   };
 }
 
+function protectGithubTokenPatch(patch) {
+  if (!patch?.github || typeof patch.github !== 'object') return patch;
+  const token = patch.github.token;
+  if (typeof token !== 'string' || !token.trim()) return patch;
+  return { ...patch, github: { ...patch.github, token: encrypt(token.trim(), 'GitHub 访问令牌') } };
+}
+
+function withDecryptedGithubToken(settings) {
+  return {
+    ...settings,
+    github: {
+      ...settings.github,
+      token: decryptForRuntime(settings.github?.token, 'GitHub 访问令牌'),
+    },
+  };
+}
+
 function withDecryptedAgentApiKey(settings) {
   if (!settings || typeof settings !== 'object') return settings;
   const profiles = Array.isArray(settings.agent?.modelProfiles) ? settings.agent.modelProfiles : [];
@@ -107,10 +124,17 @@ function withDecryptedAgentApiKey(settings) {
   };
 }
 
-function decryptForRuntime(storedKey) {
+function decryptForRuntime(storedKey, label = 'Agent API 密钥') {
   return storedKey && !isEncrypted(storedKey) && !canEncrypt()
     ? ''
-    : decrypt(storedKey, 'Agent API 密钥');
+    : decrypt(storedKey, label);
+}
+
+function migrateGithubToken(store) {
+  const token = store.getSettings().github?.token;
+  if (!canEncrypt() || !token || isEncrypted(token)) return false;
+  store.setSettings({ github: { token: encrypt(token, 'GitHub 访问令牌') } });
+  return true;
 }
 
 function migrateAgentApiKey(store) {
@@ -139,8 +163,11 @@ module.exports = {
   encrypt,
   decrypt,
   protectAgentApiKeyPatch,
+  protectGithubTokenPatch,
   withDecryptedAgentApiKey,
+  withDecryptedGithubToken,
   migrateAgentApiKey,
+  migrateGithubToken,
 };
 
 if (process.env.WORKBENCH_SECRETS_SELF_TEST === '1') {
@@ -187,6 +214,9 @@ if (process.env.WORKBENCH_SECRETS_SELF_TEST === '1') {
       id: 'deepseek', name: 'DeepSeek', apiBase: 'https://api.deepseek.com/v1', apiKey: encrypted, model: 'deepseek-chat',
     }] } });
     assert.equal(profileKeyClearedOnEndpointChange.agent.modelProfiles[0].apiKey, '');
+    const protectedGithub = protectGithubTokenPatch({ github: { enabled: true, token: 'github-test-secret' } });
+    assert.match(protectedGithub.github.token, /^safe-storage:v1:/);
+    assert.equal(withDecryptedGithubToken({ github: protectedGithub.github }).github.token, 'github-test-secret');
     console.log('secrets self-test ok');
   } finally {
     init();

@@ -162,6 +162,7 @@ export interface AppSettings {
     smtpSecure: boolean;
   };
   netease: { apiBase: string };
+  github: { enabled: boolean; token: string };
   notify: {
     ntfyUrl: string;
     ntfyTopic: string;
@@ -648,6 +649,7 @@ export type AgentProposal = { operationId?: string } & (
   | { kind: 'send_email'; to: string; cc: string; subject: string; text: string; inReplyTo: string | null }
   | { kind: 'add_music_to_playlist'; playlistId: number; playlistName: string; trackId: number; trackTitle: string }
   | { kind: 'remove_music_from_playlist'; playlistId: number; playlistName: string; trackId: number; trackTitle: string }
+  | { kind: 'github_create_issue'; arguments: { method: 'create'; owner: string; repo: string; title: string; body: string } }
 );
 
 export interface AgentReply {
@@ -657,6 +659,7 @@ export interface AgentReply {
 
 export interface WorkbenchApi {
   appInfo: () => Promise<{ name: string; version: string; platform: string }>;
+  github: { status: () => Promise<{ connected: boolean; enabled: boolean; tokenConfigured: boolean; toolCount: number; message: string }> };
   updates: {
     status: () => Promise<AppUpdateStatus>;
     check: () => Promise<AppUpdateStatus>;

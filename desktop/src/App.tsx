@@ -176,7 +176,7 @@ export default function App() {
   const [updateToastDismissed, setUpdateToastDismissed] = useState(false);
   const [unreadProactiveCount, setUnreadProactiveCount] = useState(0);
   const [profileOpen, setProfileOpen] = useState(false);
-  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsReturnPage, setSettingsReturnPage] = useState<ModuleKey>('today');
   const [sidebarWidth, setSidebarWidth] = useState(272);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [resizingSidebar, setResizingSidebar] = useState(false);
@@ -258,7 +258,6 @@ export default function App() {
   useEffect(() => {
     return window.workbench.agent.onOpenAgent((messageId) => {
       setProfileOpen(false);
-      setSettingsOpen(false);
       setProactiveAlert(null);
       setAgentOpenMessageId(messageId || '');
       setActive('agent');
@@ -292,7 +291,6 @@ export default function App() {
   useEffect(() => {
     return window.workbench.agent.onMusicCommand((command) => {
       setProfileOpen(false);
-      setSettingsOpen(false);
       setMusicCommand(command);
       if (command.type === 'play') setActive('music');
     });
@@ -323,7 +321,6 @@ export default function App() {
 
   function selectLibraryFilter(filter: string) {
     setLibraryFilter(filter);
-    setSettingsOpen(false);
     setProfileOpen(true);
     setActive('profile');
     window.dispatchEvent(new CustomEvent('workbench:profile-category', { detail: filter }));
@@ -332,16 +329,23 @@ export default function App() {
   function openProactiveAlert() {
     if (!proactiveAlert) return;
     setProfileOpen(false);
-    setSettingsOpen(false);
     setAgentOpenMessageId(proactiveAlert.messageId);
     setActive('agent');
     setProactiveAlert(null);
   }
 
   function openUpdateSettings() {
+    openSettings('settings-config');
+  }
+
+  function openSettings(section: SettingsKey = 'settings-profile') {
+    if (!active.startsWith('settings-')) setSettingsReturnPage(active as ModuleKey);
     setProfileOpen(false);
-    setSettingsOpen(true);
-    setActive('settings-config');
+    setActive(section);
+  }
+
+  function closeSettings() {
+    setActive(settingsReturnPage);
   }
 
   async function runAppUpdateAction(action: 'download' | 'cancel' | 'install') {
@@ -443,9 +447,11 @@ export default function App() {
   const shellStyle = {
     '--sidebar-width': sidebarCollapsed ? '64px' : `${sidebarWidth}px`,
   } as CSSProperties;
+  const isSettingsPage = active.startsWith('settings-');
 
   return (
-    <div className="app-shell" style={shellStyle}>
+    <div className={`app-shell${isSettingsPage ? ' app-shell--settings' : ''}`} style={shellStyle}>
+      {!isSettingsPage && <>
       <aside className={`sidebar${sidebarCollapsed ? ' compact' : ''}`}>
         <div className="brand">
           <div className="brand-avatar" aria-hidden="true">{avatarDataUrl && <img src={avatarDataUrl} alt="" />}</div>
@@ -470,7 +476,6 @@ export default function App() {
                 className="nav-item nav-parent"
                 aria-expanded={profileOpen}
                 onClick={() => {
-                  setSettingsOpen(false);
                   setProfileOpen((open) => !open);
                 }}
               >
@@ -506,7 +511,6 @@ export default function App() {
                 className={`nav-item${active === key ? ' active' : ''}`}
                 onClick={() => {
                   setProfileOpen(false);
-                  setSettingsOpen(false);
                   setActive(key);
                 }}
                 >
@@ -520,41 +524,15 @@ export default function App() {
                 </button>
             </div>
           ))}
-          <div className={`nav-group${active.startsWith('settings-') ? ' has-active' : ''}`}>
+          <div className="nav-entry">
             <button
               type="button"
-              className="nav-item nav-parent"
-              aria-expanded={settingsOpen}
-              onClick={() => {
-                setProfileOpen(false);
-                setSettingsOpen((open) => !open);
-              }}
+              className="nav-item"
+              onClick={() => openSettings()}
             >
               <SettingsIcon size={17} />
               <span>设置</span>
-              <ChevronDown className="nav-caret" size={15} />
             </button>
-            {settingsOpen && (
-              <div className="nav-submenu">
-                {[
-                  { key: 'settings-profile', label: '个人资料' },
-                  { key: 'settings-notifications', label: '通知' },
-                  { key: 'settings-config', label: '系统与 Agent' },
-                ].map(({ key, label }) => (
-                  <button
-                    key={key}
-                    type="button"
-                    className={`nav-subitem${active === key ? ' active' : ''}`}
-                    onClick={() => {
-                      setProfileOpen(false);
-                      setActive(key as SettingsKey);
-                    }}
-                  >
-                    {label}
-                  </button>
-                ))}
-              </div>
-            )}
           </div>
         </nav>
         <button type="button" className="sidebar-capture" onClick={() => setQuickCaptureOpen(true)} aria-label="快速收集，快捷键 Command 加 K" title="快速收集（⌘ K）">
@@ -578,17 +556,16 @@ export default function App() {
           setResizingSidebar(true);
         }}
       />
+      </>}
       <main className={`content${active === 'agent' ? ' content-agent' : ''}${active === 'mail' ? ' content-mail' : ''}`}>
         {active === 'today' ? (
           <Today
             onNavigate={(target) => {
               setProfileOpen(target === 'profile');
-              setSettingsOpen(false);
               setActive(target);
             }}
             onOpenAgent={(messageId) => {
               setProfileOpen(false);
-              setSettingsOpen(false);
               setAgentOpenMessageId(messageId || '');
               setActive('agent');
             }}
@@ -597,7 +574,6 @@ export default function App() {
           <WeeklyReview
             onNavigate={(target) => {
               setProfileOpen(target === 'profile');
-              setSettingsOpen(false);
               setActive(target);
             }}
           />
@@ -613,7 +589,7 @@ export default function App() {
           <Profile initialCategoryFilter={libraryFilter} />
         ) : active === 'agent' ? (
           <Agent
-            onOpenSettings={() => { setSettingsOpen(true); setActive('settings-config'); }}
+            onOpenSettings={() => openSettings('settings-config')}
             openProactiveMessageId={agentOpenMessageId}
             onProactiveMessageOpened={() => setAgentOpenMessageId('')}
           />
@@ -621,10 +597,10 @@ export default function App() {
           <Music
             agentCommand={musicCommand}
             onAgentCommandHandled={() => setMusicCommand(null)}
-            onOpenSettings={() => { setSettingsOpen(true); setActive('settings-config'); }}
+            onOpenSettings={() => openSettings('settings-config')}
           />
         ) : active === 'settings-profile' || active === 'settings-notifications' || active === 'settings-config' ? (
-          <Settings section={active} />
+          <Settings section={active} onSelectSection={setActive} onBack={closeSettings} />
         ) : (
           null
         )}
@@ -634,7 +610,6 @@ export default function App() {
         onClose={() => setQuickCaptureOpen(false)}
         onNavigate={(target) => {
           setProfileOpen(false);
-          setSettingsOpen(false);
           setActive(target);
         }}
       />

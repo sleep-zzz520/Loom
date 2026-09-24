@@ -1,6 +1,6 @@
 {
   "name": "personal-workbench-desktop",
-  "version": "0.1.5",
+  "version": "0.2.0",
   "private": true,
   "main": "electron/main.cjs",
   "scripts": {
@@ -21,6 +21,7 @@
     "agent-self-test": "cross-env WORKBENCH_AGENT_SELF_TEST=1 node electron/agent.cjs",
     "agent-state-self-test": "cross-env WORKBENCH_AGENT_STATE_SELF_TEST=1 node electron/agent-state.cjs",
     "agent-music-self-test": "node electron/agent-music-self-test.cjs",
+    "github-mcp-self-test": "node electron/github-mcp-self-test.cjs",
     "agent-format-self-test": "node --experimental-strip-types electron/agent-message-format-self-test.cjs",
     "agent-conversation-title-self-test": "node --experimental-strip-types electron/agent-conversation-title-self-test.cjs",
     "profile-avatar-self-test": "node --experimental-strip-types electron/profile-avatar-self-test.cjs",
@@ -36,12 +37,13 @@
     "updates-self-test": "node electron/updates-self-test.cjs",
     "music-service-self-test": "cross-env WORKBENCH_MUSIC_SERVICE_SELF_TEST=1 node electron/music-service.cjs",
     "proactive-self-test": "cross-env WORKBENCH_PROACTIVE_SELF_TEST=1 node electron/proactive.cjs",
-    "test": "npm run build && npm run dependency-self-test && npm run self-test && npm run store-self-test && npm run today-self-test && npm run weekly-self-test && npm run quick-capture-self-test && npm run mail-self-test && npm run operation-self-test && npm run security-self-test && npm run secrets-self-test && npm run updates-self-test && npm run notifier-self-test && npm run agent-self-test && npm run agent-state-self-test && npm run agent-music-self-test && npm run agent-conversation-title-self-test && npm run profile-avatar-self-test && npm run music-shortcuts-self-test && npm run music-playback-state-self-test && npm run music-lyrics-self-test && npm run music-theme-self-test && npm run music-self-test && npm run music-service-self-test && npm run proactive-self-test",
+    "test": "npm run build && npm run dependency-self-test && npm run self-test && npm run store-self-test && npm run today-self-test && npm run weekly-self-test && npm run quick-capture-self-test && npm run mail-self-test && npm run operation-self-test && npm run security-self-test && npm run secrets-self-test && npm run updates-self-test && npm run notifier-self-test && npm run agent-self-test && npm run agent-state-self-test && npm run agent-music-self-test && npm run github-mcp-self-test && npm run agent-conversation-title-self-test && npm run profile-avatar-self-test && npm run music-shortcuts-self-test && npm run music-playback-state-self-test && npm run music-lyrics-self-test && npm run music-theme-self-test && npm run music-self-test && npm run music-service-self-test && npm run proactive-self-test",
     "dependency-self-test": "node electron/dependency-self-test.cjs",
     "runtime-smoke-test": "npm run build && electron electron/runtime-smoke-test.cjs",
     "release:win": "npm run release:preflight && npm run build && cross-env LOOM_RELEASE=1 electron-builder --config electron-builder.config.cjs --win --x64 --publish never && node electron/verify-update-artifacts.cjs"
   },
   "dependencies": {
+    "@modelcontextprotocol/client": "^2.0.0",
     "dompurify": "^3.4.14",
     "electron-updater": "^6.8.9",
     "imapflow": "^1.7.2",

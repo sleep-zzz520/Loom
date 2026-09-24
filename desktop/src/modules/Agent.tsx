@@ -1189,6 +1189,7 @@ function ProposalCard({ proposal, busy, onConfirm, onCancel }: { proposal: Agent
   const isMemory = proposal.kind === 'create_memory_candidate';
   const isSkill = proposal.kind === 'create_skill_candidate';
   const isEmail = proposal.kind === 'send_email';
+  const isGithubIssue = proposal.kind === 'github_create_issue';
   const isMusicPlaylistChange = proposal.kind === 'add_music_to_playlist' || proposal.kind === 'remove_music_from_playlist';
   const isMusicPlaylistAdd = proposal.kind === 'add_music_to_playlist';
   const icon = isTodo
@@ -1203,6 +1204,8 @@ function ProposalCard({ proposal, busy, onConfirm, onCancel }: { proposal: Agent
             ? <Brain size={17} />
               : isSkill
                 ? <WandSparkles size={17} />
+                : isGithubIssue
+                  ? <FileText size={17} />
                 : isEmail
                   ? <Mail size={17} />
                 : isMusicPlaylistChange
@@ -1220,6 +1223,8 @@ function ProposalCard({ proposal, busy, onConfirm, onCancel }: { proposal: Agent
             ? '加入候选长期记忆'
           : isSkill
             ? '加入候选 Skill'
+            : isGithubIssue
+              ? '创建 GitHub issue'
             : isEmail
               ? '发送邮件'
             : isMusicPlaylistChange
@@ -1231,6 +1236,8 @@ function ProposalCard({ proposal, busy, onConfirm, onCancel }: { proposal: Agent
       ? proposal.content
       : isSkill
         ? proposal.name
+        : isGithubIssue
+          ? proposal.arguments.title
         : isEmail
           ? `“${proposal.subject}”`
         : isMusicPlaylistChange
@@ -1255,6 +1262,11 @@ function ProposalCard({ proposal, busy, onConfirm, onCancel }: { proposal: Agent
           <small>确认后进入候选区，审核采纳后才会影响后续对话。{proposal.validUntil ? `有效期至 ${new Date(proposal.validUntil).toLocaleString('zh-CN', { hour12: false })}。` : ''}</small>
         ) : isSkill ? (
           <small>{proposal.description} · 确认后仍需审核启用。</small>
+        ) : isGithubIssue ? (
+          <div className="agent-github-proposal">
+            <small>仓库：{proposal.arguments.owner}/{proposal.arguments.repo} · 确认后会提交到 GitHub。</small>
+            {proposal.arguments.body && <details><summary>查看 issue 正文</summary><pre>{proposal.arguments.body}</pre></details>}
+          </div>
         ) : isEmail ? (
           <small>收件人：{proposal.to}{proposal.cc ? ` · 抄送：${proposal.cc}` : ''} · 确认后会通过已配置的 SMTP 账户发出。</small>
         ) : isMusicPlaylistChange ? (
@@ -1265,7 +1277,7 @@ function ProposalCard({ proposal, busy, onConfirm, onCancel }: { proposal: Agent
       </div>
       <div className="agent-proposal-actions">
         <button type="button" className="text-btn" onClick={onCancel} disabled={busy}>取消</button>
-        <button type="button" className="btn-primary agent-confirm" onClick={onConfirm} disabled={busy}><Check size={15} />{busy ? '同步中' : isEmail ? '确认发送' : isMusicPlaylistChange ? '确认同步' : '确认保存'}</button>
+        <button type="button" className="btn-primary agent-confirm" onClick={onConfirm} disabled={busy}><Check size={15} />{busy ? '同步中' : isGithubIssue ? '确认创建' : isEmail ? '确认发送' : isMusicPlaylistChange ? '确认同步' : '确认保存'}</button>
       </div>
     </aside>
   );

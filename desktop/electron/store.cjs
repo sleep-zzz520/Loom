@@ -35,6 +35,7 @@ const DEFAULT_DATA = {
       smtpSecure: true,
     },
     netease: { apiBase: 'http://127.0.0.1:3000' },
+    github: { enabled: false, token: '' },
     notify: {
       ntfyUrl: 'https://ntfy.sh',
       ntfyTopic: '',
@@ -142,6 +143,7 @@ function safeDataCopy(data) {
     for (const profile of safe.settings.agent.modelProfiles || []) profile.apiKey = '';
   }
   if (safe.settings?.sync) safe.settings.sync.token = '';
+  if (safe.settings?.github) safe.settings.github.token = '';
   return safe;
 }
 
@@ -153,6 +155,7 @@ function safeSettingsCopy(settings) {
     for (const profile of safe.agent.modelProfiles || []) profile.apiKey = '';
   }
   if (safe.sync) safe.sync.token = '';
+  if (safe.github) safe.github.token = '';
   return safe;
 }
 
@@ -170,6 +173,9 @@ function sanitizeRendererSettingsPatch(patch) {
     });
   }
   if (safe.sync && typeof safe.sync === 'object') delete safe.sync.token;
+  if (safe.github && typeof safe.github === 'object' && !(typeof safe.github.token === 'string' && safe.github.token.trim())) {
+    delete safe.github.token;
+  }
   return safe;
 }
 
@@ -386,6 +392,7 @@ function restoreBackup(id) {
   }
   normalizeAgentModelProfiles(restored.settings.agent);
   restored.settings.sync.token = current.settings.sync.token;
+  restored.settings.github.token = current.settings.github.token;
   writeData(restored);
   return { restoredAt: new Date().toISOString(), backup: listBackups().find((item) => item.id === target.id) || null };
 }
@@ -511,17 +518,21 @@ if (process.env.WORKBENCH_STORE_SELF_TEST === '1') {
     assert.equal(migratedMemory.pinned, false);
     assert.deepEqual(migratedMemory.similarIds, []);
     setSettings({ agent: { apiKey: 'store-self-test-secret' } });
+    setSettings({ github: { enabled: true, token: 'store-github-test-secret' } });
     assert.equal(getSettings().agent.modelProfiles[0].apiKey, 'store-self-test-secret');
     const publicSettings = safeSettingsCopy(getSettings());
     assert.equal(publicSettings.agent.apiKey, '');
+    assert.equal(publicSettings.github.token, '');
     const sanitizedEmptySecret = sanitizeRendererSettingsPatch({
       email: { pass: 'email-secret' },
       agent: { apiBase: 'https://api.example.com', apiKey: '' },
       sync: { token: 'sync-secret' },
+      github: { token: '' },
     });
     assert.equal(Object.hasOwn(sanitizedEmptySecret.email, 'pass'), false);
     assert.equal(Object.hasOwn(sanitizedEmptySecret.agent, 'apiKey'), false);
     assert.equal(Object.hasOwn(sanitizedEmptySecret.sync, 'token'), false);
+    assert.equal(Object.hasOwn(sanitizedEmptySecret.github, 'token'), false);
     assert.equal(sanitizeRendererSettingsPatch({ agent: { apiKey: 'replacement-secret' } }).agent.apiKey, 'replacement-secret');
     const profiles = [{
       id: 'primary',
@@ -550,6 +561,7 @@ if (process.env.WORKBENCH_STORE_SELF_TEST === '1') {
     assert.ok(!backupText.includes('store-self-test-secret'));
     assert.ok(!backupText.includes('primary-profile-secret'));
     assert.ok(!backupText.includes('backup-profile-secret'));
+    assert.ok(!backupText.includes('store-github-test-secret'));
     setModule('notes', [{ id: 'after-backup', title: '恢复前的变化', content: '', updatedAt: '' }]);
     const restored = restoreBackup(backup.id);
     assert.ok(restored.restoredAt);

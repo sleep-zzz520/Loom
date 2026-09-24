@@ -42,6 +42,7 @@ async function invokeMusic(channel, ...args) {
 
 contextBridge.exposeInMainWorld('workbench', {
   appInfo: () => ipcRenderer.invoke('app:info'),
+  github: { status: () => ipcRenderer.invoke('github:status') },
   updates: {
     status: () => ipcRenderer.invoke('app:update-status'),
     check: () => ipcRenderer.invoke('app:check-for-updates'),

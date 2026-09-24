@@ -6,6 +6,7 @@ const today = require('./today.cjs');
 const weekly = require('./weekly.cjs');
 const workspace = require('./workspace.cjs');
 const agent = require('./agent.cjs');
+const githubMcp = require('./github-mcp.cjs');
 const agentState = require('./agent-state.cjs');
 const notifier = require('./notifier.cjs');
 const proactive = require('./proactive.cjs');
@@ -64,7 +65,7 @@ function getMusicServiceStatus() {
 }
 
 function getAgentSettings() {
-  return secrets.withDecryptedAgentApiKey(getMusicSettings());
+  return secrets.withDecryptedGithubToken(secrets.withDecryptedAgentApiKey(getMusicSettings()));
 }
 
 function createWindow() {
@@ -161,7 +162,7 @@ function prepareRendererSettingsPatch(patch) {
       && security.hasServiceOriginChanged(current.netease?.apiBase, next.netease.apiBase)
   );
   return {
-    patch: secrets.protectAgentApiKeyPatch(next, { currentAgent: current.agent, currentApiBase: current.agent?.apiBase }),
+    patch: secrets.protectGithubTokenPatch(secrets.protectAgentApiKeyPatch(next, { currentAgent: current.agent, currentApiBase: current.agent?.apiBase })),
     clearMusicSession: musicOriginChanged,
   };
 }
@@ -378,6 +379,7 @@ function registerIpc() {
   });
   ipcMain.handle('mail:send', (_event, input, operationId) => executeMailOperation(operationId, input));
   ipcMain.handle('agent:status', () => agent.getStatus(getAgentSettings()));
+  ipcMain.handle('github:status', () => githubMcp.status(getAgentSettings()));
   ipcMain.handle('agent:chat', async (event, messages) => {
     const reply = await agent.runAgent(messages, getAgentSettings(), (delta) => {
       event.sender.send('agent:stream', delta);
@@ -388,11 +390,20 @@ function registerIpc() {
     return reply.proposal ? { ...reply, proposal: prepareAgentProposal(reply.proposal) } : reply;
   });
   ipcMain.handle('agent:confirm-proposal', async (_event, proposal) => {
+    const githubProposal = githubMcp.normaliseProposal(proposal);
+    if (proposal?.kind === 'github_create_issue' && !githubProposal) throw new Error('GitHub issue 提案无效');
     const musicProposal = agent.normaliseMusicProposal(proposal);
     const emailProposal = agent.normaliseEmailProposal(proposal);
-    const label = emailProposal ? '邮件投递' : musicProposal ? '歌单操作' : '已确认操作';
+    const label = githubProposal ? 'GitHub issue' : emailProposal ? '邮件投递' : musicProposal ? '歌单操作' : '已确认操作';
     const execution = await operations.execute(proposal?.operationId, 'agent:confirm', proposal, label, async () => {
-      const result = musicProposal
+      const result = githubProposal
+        ? await (async () => {
+          const session = await githubMcp.connect(getAgentSettings());
+          if (!session) throw new Error('GitHub MCP 尚未启用');
+          try { return await session.createIssue(githubProposal.arguments); }
+          finally { await session.close(); }
+        })()
+        : musicProposal
         ? await (musicProposal.kind === 'add_music_to_playlist'
           ? music.addToPlaylist(musicProposal.playlistId, musicProposal.trackId, getMusicSettings(), store)
           : music.removeFromPlaylist(musicProposal.playlistId, musicProposal.trackId, getMusicSettings(), store))
@@ -401,7 +412,9 @@ function registerIpc() {
           : agent.confirmProposal(proposal);
       notifyAgentStateChanged();
       let response;
-      if (emailProposal) {
+      if (githubProposal) {
+        response = { content: `已在 ${githubProposal.arguments.owner}/${githubProposal.arguments.repo} 创建 issue：${githubProposal.arguments.title}。${String(result).slice(0, 1000)}` };
+      } else if (emailProposal) {
         const accepted = result.accepted?.join('、') || emailProposal.to;
         const rejected = result.rejected?.length ? `；未被发件服务器接受：${result.rejected.join('、')}` : '';
         const deliveryNotice = result.dsnSupported
@@ -492,6 +505,7 @@ app.whenReady().then(() => {
   store.init(app.getPath('userData'));
   secrets.init({ safeStorage });
   secrets.migrateAgentApiKey(store);
+  secrets.migrateGithubToken(store);
   workspace.repairPersonalDateTodos();
   mail.init({ safeStorage });
   music.init(app.getPath('userData'));
